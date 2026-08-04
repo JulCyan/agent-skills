@@ -29,8 +29,8 @@
 
 - [x] Run `npm test` with the private prohibited-term environment configured.
 - [x] Run the skill-creator validator for `skills/shopify-media-sync`.
-- [ ] Audit tracked files, commit metadata, branch name, and PR text for public
+- [x] Audit tracked files, commit metadata, branch name, and PR text for public
   identifiers and credentials.
-- [ ] Verify the GitHub branch SHA before and after branch-source copy-install.
+- [x] Verify the GitHub branch SHA before and after branch installation.
 - [x] Record only evidence established by this change; leave Release, consumer
   rollout, Shopify production, Publish, and Live unclaimed.
