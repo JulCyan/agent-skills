@@ -1,0 +1,30 @@
+schema: spec-driven
+
+context: |
+  这是 JulCyan 个人维护的公开 Agent Skills 集合，面向多种 AI coding agents。
+  首个产品能力是 shopify-media-sync；后续 Skills 继续放在 skills/<skill-name>/。
+  OpenSpec 是 proposal、spec、design、tasks 与 verification 的唯一持久化事实源。
+  实施遵循 brainstorming、隔离 worktree、测试先行、review 与完成前验证。
+  规划与仓库文档默认使用中文；代码标识、API 名称和公开 README 可按受众保留英文。
+  commit message 使用 type(scope): 中文描述。
+  不读取或提交 .env、token、cookie、凭据、真实店铺、真实资源 ID、个人绝对路径或真实运行 evidence。
+
+rules:
+  proposal:
+    - 明确列出目标、范围、非目标和 Cannot Claim。
+  specs:
+    - 使用可测试的 SHALL 要求与 WHEN-THEN 场景。
+    - 覆盖 npx skills 发现安装、跨 cwd 执行、默认零远端写入与恢复边界。
+  design:
+    - 区分 Skill 安装面、确定性执行器、外部依赖和 Release 分发面。
+    - 公开内容只使用合成 fixtures；私有 denylist 通过运行时环境提供。
+  tasks:
+    - 每个实现任务包含对应验证，优先 RED 再最小 GREEN。
+    - 完成前运行 Go、Skill、安装、公开内容和 diff 验证。
+
+operations:
+  apply:
+    guidance:
+      - 只在 codex/add-shopify-media-sync worktree 修改文件。
+      - main 工作区保持只读。
+      - push、merge、Release 和 Shopify 写入需要独立授权。

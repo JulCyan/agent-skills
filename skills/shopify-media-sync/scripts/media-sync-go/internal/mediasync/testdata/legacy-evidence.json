@@ -1,0 +1,18 @@
+{
+  "store": "store-us",
+  "results": [
+    {
+      "row_no": "1",
+      "filename": "same.svg",
+      "requestedFilename": "same.svg",
+      "fileId": "gid://shopify/MediaImage/1001",
+      "mediaGid": "gid://shopify/MediaImage/1001",
+      "cdnUrl": "https://cdn.shopify.com/s/files/1/same.svg",
+      "sha256": "d0cce0a8046d2b7b0c4981e3307a6224f0c37936d7d23fb294bf41ebd9087fc5",
+      "fileStatus": "READY",
+      "width": 120,
+      "height": 80,
+      "status": "READY"
+    }
+  ]
+}

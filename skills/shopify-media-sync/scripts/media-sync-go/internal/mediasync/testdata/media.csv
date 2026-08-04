@@ -1,0 +1,4 @@
+序号,source图片名,target图片文件名,en,de,jp,fr
+1,same.svg,,Same English alt,,Same Japanese alt,
+2,new.svg,target.svg,Target English alt,Target German alt,,
+3,missing.svg,,Missing English alt,,,
