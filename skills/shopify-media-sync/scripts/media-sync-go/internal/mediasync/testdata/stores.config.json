@@ -1,0 +1,16 @@
+{
+  "stores": [
+    {
+      "id": "store-us",
+      "label": "US",
+      "shopifyStore": "store-us",
+      "enabled": true
+    },
+    {
+      "id": "store-de",
+      "label": "DE",
+      "shopifyStore": "store-de",
+      "enabled": true
+    }
+  ]
+}

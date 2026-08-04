@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "forbiddenTokenEnvironment": "AGENT_SKILLS_FORBIDDEN_TOKENS",
+  "allowedEmailDomains": [
+    "users.noreply.github.com"
+  ],
+  "ignoredDirectories": [
+    ".git",
+    ".codex",
+    "node_modules",
+    ".runtime",
+    ".cache",
+    "dist"
+  ]
+}

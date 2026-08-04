@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "skillVersion": "0.1.0-dev",
+  "repository": "JulCyan/agent-skills",
+  "release": {
+    "status": "unpublished",
+    "tag": "shopify-media-sync-v0.1.0",
+    "assets": {}
+  }
+}

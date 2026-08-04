@@ -1,0 +1,12 @@
+node_modules/
+coverage/
+.runtime/
+.cache/
+dist/
+*.test
+*.exe
+.DS_Store
+.codex/skills/
+
+.env*
+!.env.example

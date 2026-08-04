@@ -1,0 +1,154 @@
+{
+  "run_id": "run-golden",
+  "generated_at": "2026-07-01T00:00:00Z",
+  "template": "product.example",
+  "summary": {
+    "stores": ["store-us"],
+    "rows": 3,
+    "changes": 3,
+    "by_action": {
+      "alt_update": 2,
+      "error": 1,
+      "file_upload_new_filename": 1,
+      "json_replace_needed": 1,
+      "translation_update": 2,
+      "verify": 1
+    },
+    "errors": 1,
+    "needs_execute": 2,
+    "filename_changed": 1
+  },
+  "desired": {
+    "source": "testdata/media.csv",
+    "rows": [
+      {
+        "row_no": "1",
+        "source_filename": "same.svg",
+        "target_filename": "same.svg",
+        "filename_changed": false,
+        "translations": {
+          "en": "Same English alt",
+          "ja": "Same Japanese alt"
+        }
+      },
+      {
+        "row_no": "2",
+        "source_filename": "new.svg",
+        "target_filename": "target.svg",
+        "filename_changed": true,
+        "translations": {
+          "en": "Target English alt",
+          "de": "Target German alt"
+        }
+      },
+      {
+        "row_no": "3",
+        "source_filename": "missing.svg",
+        "target_filename": "missing.svg",
+        "filename_changed": false,
+        "translations": {
+          "en": "Missing English alt"
+        }
+      }
+    ]
+  },
+  "resources": {
+    "root": "testdata/images",
+    "files": {
+      "target.svg": {
+        "filename": "target.svg",
+        "path": "testdata/images/target.svg",
+        "bytes": 192,
+        "sha256": "81cfbb1800b763e0123dad5de482f76969a46ac5350847719b58221733211342",
+        "mime_type": "image/svg+xml"
+      },
+      "same.svg": {
+        "filename": "same.svg",
+        "path": "testdata/images/same.svg",
+        "bytes": 209,
+        "sha256": "d0cce0a8046d2b7b0c4981e3307a6224f0c37936d7d23fb294bf41ebd9087fc5",
+        "mime_type": "image/svg+xml"
+      }
+    }
+  },
+  "changes": [
+    {
+      "store": "store-us",
+      "row_no": "1",
+      "source_filename": "same.svg",
+      "target_filename": "same.svg",
+      "filename_changed": false,
+      "actions": ["verify", "alt_update", "translation_update"],
+      "status": "planned",
+      "reason": "sha256 unchanged; skip binary upload",
+      "alt": "Same English alt",
+      "translations": {
+        "ja": "Same Japanese alt"
+      },
+      "resource": {
+        "filename": "same.svg",
+        "path": "testdata/images/same.svg",
+        "bytes": 209,
+        "sha256": "d0cce0a8046d2b7b0c4981e3307a6224f0c37936d7d23fb294bf41ebd9087fc5",
+        "mime_type": "image/svg+xml"
+      },
+      "evidence": {
+        "store": "store-us",
+        "row_no": "1",
+        "source_filename": "same.svg",
+        "target_filename": "same.svg",
+        "filename": "same.svg",
+        "file_id": "gid://shopify/MediaImage/1001",
+        "media_gid": "gid://shopify/MediaImage/1001",
+        "cdn_url": "https://cdn.shopify.com/s/files/1/same.svg",
+        "width": 120,
+        "height": 80,
+        "sha256": "d0cce0a8046d2b7b0c4981e3307a6224f0c37936d7d23fb294bf41ebd9087fc5",
+        "file_status": "READY",
+        "status": "READY"
+      },
+      "template": "product.example",
+      "needs_execute": true
+    },
+    {
+      "store": "store-us",
+      "row_no": "2",
+      "source_filename": "new.svg",
+      "target_filename": "target.svg",
+      "filename_changed": true,
+      "actions": [
+        "file_upload_new_filename",
+        "alt_update",
+        "translation_update",
+        "json_replace_needed"
+      ],
+      "status": "planned",
+      "alt": "Target English alt",
+      "translations": {
+        "de": "Target German alt"
+      },
+      "resource": {
+        "filename": "target.svg",
+        "path": "testdata/images/target.svg",
+        "bytes": 192,
+        "sha256": "81cfbb1800b763e0123dad5de482f76969a46ac5350847719b58221733211342",
+        "mime_type": "image/svg+xml"
+      },
+      "template": "product.example",
+      "needs_execute": true
+    },
+    {
+      "store": "store-us",
+      "row_no": "3",
+      "source_filename": "missing.svg",
+      "target_filename": "missing.svg",
+      "filename_changed": false,
+      "actions": ["error"],
+      "status": "error",
+      "reason": "target 图片不存在，且没有可复用 evidence",
+      "alt": "Missing English alt",
+      "template": "product.example",
+      "needs_execute": false
+    }
+  ]
+}

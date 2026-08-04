@@ -1,0 +1,34 @@
+{
+  "source": "testdata/media.csv",
+  "rows": [
+    {
+      "row_no": "1",
+      "source_filename": "same.svg",
+      "target_filename": "same.svg",
+      "filename_changed": false,
+      "translations": {
+        "en": "Same English alt",
+        "ja": "Same Japanese alt"
+      }
+    },
+    {
+      "row_no": "2",
+      "source_filename": "new.svg",
+      "target_filename": "target.svg",
+      "filename_changed": true,
+      "translations": {
+        "en": "Target English alt",
+        "de": "Target German alt"
+      }
+    },
+    {
+      "row_no": "3",
+      "source_filename": "missing.svg",
+      "target_filename": "missing.svg",
+      "filename_changed": false,
+      "translations": {
+        "en": "Missing English alt"
+      }
+    }
+  ]
+}

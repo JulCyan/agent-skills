@@ -1,0 +1,6 @@
+interface:
+  display_name: "Shopify Media Sync"
+  short_description: "Plan and safely recover Shopify Files media sync"
+  default_prompt: "Use $shopify-media-sync to plan and safely supervise a Shopify Files media synchronization."
+policy:
+  allow_implicit_invocation: true
