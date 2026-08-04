@@ -197,7 +197,7 @@ func TestPlanRejectsExecuteFlag(t *testing.T) {
 
 func TestApplyRejectsLatestPlanInference(t *testing.T) {
 	err := run(t.Context(), []string{"apply", "--resume", "last", "--execute", "--no-env-file"}, ioDiscard{})
-	if err == nil || !strings.Contains(err.Error(), "不得使用 --resume") {
+	if err == nil || !strings.Contains(err.Error(), "--resume") {
 		t.Fatalf("expected latest-plan rejection, got %v", err)
 	}
 }
@@ -393,6 +393,32 @@ func TestApplyExecuteRejectsStoresConfigDriftAfterPreview(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("config drift must stop before remote stages: %v", runner.calls)
+	}
+}
+
+func TestStoreResolverUsesFrozenApplyConfigSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "stores.config.json")
+	previewed := StoresConfig{Stores: []Store{{
+		ID: "store-a", ShopifyStore: "previewed-store", Enabled: true,
+	}}}
+	drifted := StoresConfig{Stores: []Store{{
+		ID: "store-a", ShopifyStore: "drifted-store", Enabled: true,
+	}}}
+	previewedRaw, err := json.Marshal(previewed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteJSON(t, configPath, drifted)
+	resolve, _, err := storeResolver(commandOptions{
+		storesConfig:         configPath,
+		storesConfigSnapshot: previewedRaw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve("store-a").ShopifyStore; got != "previewed-store" {
+		t.Fatalf("store resolver re-read drifted config: %s", got)
 	}
 }
 

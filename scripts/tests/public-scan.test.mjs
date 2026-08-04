@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
-import { loadPolicy, scanPaths } from '../scan-public.mjs';
+import { loadPolicy, scanGitIndex, scanMetadataText, scanPaths } from '../scan-public.mjs';
+
+const execFileAsync = promisify(execFile);
 
 const policyPath = new URL('../../config/public-scan-policy.json', import.meta.url);
 
@@ -41,6 +45,51 @@ test('operator-supplied forbidden token is matched without storing it in policy'
   assert.equal(findings[0].path, 'README.md');
   assert.ok(!JSON.stringify(findings).includes(forbidden));
   assert.ok(!policyBody.includes(forbidden));
+});
+
+test('operator forbidden values match multi-word content and tracked path names', async () => {
+  const forbidden = 'private project name';
+  const root = await fixture({
+    'notes/content.md': `owned by ${forbidden}\n`,
+    'notes/private project name/placeholder.md': 'generic\n',
+  });
+  const findings = await scanPaths(root, await loadPolicy(policyPath), {
+    forbiddenTokens: [forbidden],
+  });
+  assert.deepEqual(findings, [
+    { path: 'notes/content.md', rule: 'operator-forbidden-token' },
+    { path: 'notes/private project name/placeholder.md', rule: 'operator-forbidden-token' },
+  ]);
+});
+
+test('Git index scan includes tracked files under filesystem-ignored directories', async () => {
+  const forbidden = 'private-project';
+  const root = await fixture({ '.cache/tracked.txt': `${forbidden}\n` });
+  await execFileAsync('git', ['init', '--quiet'], { cwd: root });
+  await execFileAsync('git', ['add', '-f', '.cache/tracked.txt'], { cwd: root });
+
+  const findings = await scanGitIndex(root, await loadPolicy(policyPath), {
+    forbiddenTokens: [forbidden],
+  });
+  assert.deepEqual(findings, [
+    { path: '.cache/tracked.txt', rule: 'operator-forbidden-token' },
+  ]);
+});
+
+test('external PR metadata is scanned without treating SSH remotes as email', async () => {
+  const forbidden = 'private-project';
+  const findings = scanMetadataText(
+    '<github-event>',
+    JSON.stringify({
+      title: `review ${forbidden}`,
+      ssh_url: ['git', 'github.com:Example/repo.git'].join('@'),
+    }),
+    await loadPolicy(policyPath),
+    [forbidden],
+  );
+  assert.deepEqual(findings, [
+    { path: '<github-event>', rule: 'operator-forbidden-token' },
+  ]);
 });
 
 test('credential-shaped values are rejected without echoing the value', async () => {

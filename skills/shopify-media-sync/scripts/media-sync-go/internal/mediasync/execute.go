@@ -1104,7 +1104,13 @@ func resolveLatestRunFile(opts commandOptions, name string) (string, error) {
 }
 
 func storeResolver(opts commandOptions) (func(string) Store, map[string]bool, error) {
-	cfg, err := loadStoresConfig(opts.storesConfig)
+	var cfg StoresConfig
+	var err error
+	if opts.storesConfigSnapshot != nil {
+		cfg, err = loadStoresConfigBytes(opts.storesConfigSnapshot)
+	} else {
+		cfg, err = loadStoresConfig(opts.storesConfig)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

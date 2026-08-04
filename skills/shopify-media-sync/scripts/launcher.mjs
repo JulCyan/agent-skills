@@ -5,10 +5,11 @@ import { createHash } from 'node:crypto';
 import {
   access,
   chmod,
+  link,
   mkdir,
+  mkdtemp,
   readFile,
   realpath,
-  rename,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -89,26 +90,40 @@ async function verifyCachedBinary(binaryPath, expectedDigest) {
   return binaryPath;
 }
 
+async function installVerifiedTarget(temporary, target, expectedDigest) {
+  try {
+    await link(temporary, target);
+  } catch (error) {
+    if (error.code !== 'EEXIST') {
+      throw error;
+    }
+    await verifyCachedBinary(target, expectedDigest);
+  }
+  await verifyCachedBinary(target, expectedDigest);
+  return target;
+}
+
 async function downloadReleaseBinary({ manifest, asset, cacheRoot, fetchImpl }) {
   await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
   const target = path.join(cacheRoot, asset.name);
-  const temporary = `${target}.download-${process.pid}`;
+  const temporaryDirectory = await mkdtemp(path.join(cacheRoot, '.download-'));
+  const temporary = path.join(temporaryDirectory, asset.name);
   const url = `https://github.com/${manifest.repository}/releases/download/${encodeURIComponent(
     manifest.release.tag,
   )}/${encodeURIComponent(asset.name)}`;
 
-  const response = await fetchImpl(url, { redirect: 'follow' });
-  if (!response.ok) {
-    throw new Error(`executor download failed with HTTP ${response.status}`);
-  }
-  const body = Buffer.from(await response.arrayBuffer());
-  await writeFile(temporary, body, { mode: 0o700 });
   try {
+    const response = await fetchImpl(url, { redirect: 'follow' });
+    if (!response.ok) {
+      throw new Error(`executor download failed with HTTP ${response.status}`);
+    }
+    const body = Buffer.from(await response.arrayBuffer());
+    await writeFile(temporary, body, { mode: 0o700, flag: 'wx' });
     await verifyCachedBinary(temporary, asset.sha256);
     await chmod(temporary, 0o700);
-    await rename(temporary, target);
+    await installVerifiedTarget(temporary, target, asset.sha256);
   } finally {
-    await rm(temporary, { force: true });
+    await rm(temporaryDirectory, { recursive: true, force: true });
   }
   return target;
 }
@@ -203,28 +218,23 @@ async function buildSourceExecutor({ scriptDir, cacheRoot }) {
   const buildRoot = path.join(cacheRoot, 'source-build');
   await mkdir(buildRoot, { recursive: true, mode: 0o700 });
   const suffix = process.platform === 'win32' ? '.exe' : '';
-  const temporary = path.join(buildRoot, `.shopify-media-sync-${process.pid}${suffix}`);
-  const result = await spawnAndWait(
-    'go',
-    ['build', '-trimpath', '-buildvcs=false', '-o', temporary, './cmd/shopify-media-sync'],
-    { cwd: moduleRoot },
-  );
-  if (result.code !== 0) {
-    throw new Error(`go build failed with exit ${result.code ?? result.signal}`);
-  }
+  const temporaryDirectory = await mkdtemp(path.join(buildRoot, '.build-'));
+  const temporary = path.join(temporaryDirectory, `shopify-media-sync${suffix}`);
   try {
+    const result = await spawnAndWait(
+      'go',
+      ['build', '-trimpath', '-buildvcs=false', '-o', temporary, './cmd/shopify-media-sync'],
+      { cwd: moduleRoot },
+    );
+    if (result.code !== 0) {
+      throw new Error(`go build failed with exit ${result.code ?? result.signal}`);
+    }
     const digest = await sha256File(temporary);
     const target = path.join(buildRoot, `shopify-media-sync-${digest}${suffix}`);
     await chmod(temporary, 0o700);
-    await rename(temporary, target).catch(async (error) => {
-      if (await defaultPathExists(target)) {
-        return;
-      }
-      throw error;
-    });
-    return target;
+    return await installVerifiedTarget(temporary, target, digest);
   } finally {
-    await rm(temporary, { force: true });
+    await rm(temporaryDirectory, { recursive: true, force: true });
   }
 }
 

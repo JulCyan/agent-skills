@@ -6,6 +6,7 @@ type Store = config.Store
 type StoresConfig = config.StoresConfig
 
 var loadStoresConfig = config.LoadStoresConfig
+var loadStoresConfigBytes = config.LoadStoresConfigBytes
 var selectStores = config.SelectStores
 var findUp = config.FindUp
 var findUpFrom = config.FindUpFrom

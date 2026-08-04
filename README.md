@@ -13,17 +13,22 @@ Status: **Public preview**
 
 ## Install
 
-Install the Skill into a project with the pinned Skills CLI:
+Install the Skill into a project with the current Skills CLI:
 
 ```bash
-npx skills@1.5.21 add JulCyan/agent-skills --skill shopify-media-sync --copy
+npx skills add JulCyan/agent-skills --skill shopify-media-sync --copy
 ```
 
 List the Skills exposed by the repository:
 
 ```bash
-npx skills@1.5.21 add JulCyan/agent-skills --list
+npx skills add JulCyan/agent-skills --list
 ```
+
+This public preview does not yet include an open-source license. Until a
+license is selected, the commands above are for the author's own acceptance or
+other explicitly authorized evaluation; source visibility is not a grant to
+copy, modify, or redistribute the project.
 
 The consumer project owns the generated `skills-lock.json`. This provider
 repository intentionally does not commit a root lockfile because it publishes
@@ -38,14 +43,16 @@ The installed Skill selects an executor in this order:
 3. the bundled Go implementation when Go is available;
 4. a structured `NEEDS_SETUP` result.
 
-The current preview has no binary Release, so systems without Go fail closed.
+The current preview has neither a binary Release nor an explicit trusted
+binary, so systems without Go fail closed.
 Optional Lark/Feishu inputs require `lark-cli`; local CSV, XLSX, JSON, zip, and
 directory inputs do not.
 
 ## Safety
 
 - Planning and preview do not write to Shopify.
-- Remote execution requires an explicit reviewed plan and `--execute`.
+- Remote execution is exposed only through a reviewed `apply` preview followed
+  by identity-matched `apply --execute`.
 - Credentials are read only from explicit supported configuration and are
   never printed.
 - The repository uses synthetic fixtures and scans for credentials, absolute
@@ -56,7 +63,7 @@ directory inputs do not.
 
 Requirements:
 
-- Node.js 20.19 or newer
+- Node.js 22.20 or newer (required by the pinned Skills CLI acceptance suite)
 - the Go version declared in
   `skills/shopify-media-sync/scripts/media-sync-go/go.mod`
 

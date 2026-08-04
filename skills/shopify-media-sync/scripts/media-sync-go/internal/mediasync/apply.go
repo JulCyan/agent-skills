@@ -2,10 +2,13 @@ package mediasync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -229,6 +232,20 @@ func runApply(ctx context.Context, stdout io.Writer, opts commandOptions) error 
 	}
 	if err := validateApplyPreviewBinding(evidence.Preview, currentPreview); err != nil {
 		return finish(applyStatusNeedsAttention, "preview", "使用完全相同的 plan、store scope 与 stores config 重新运行 preview", err)
+	}
+	if currentPreview.StoresConfigPath != "" {
+		raw, err := os.ReadFile(currentPreview.StoresConfigPath)
+		if err != nil {
+			return finish(applyStatusNeedsAttention, "preview", "修复 stores config 后重新运行 preview", err)
+		}
+		actualSHA := sha256.Sum256(raw)
+		if hex.EncodeToString(actualSHA[:]) != currentPreview.StoresConfigSHA256 {
+			return finish(applyStatusNeedsAttention, "preview", "stores config 已变化；重新运行 preview", errors.New("stores config 在 binding 后发生漂移"))
+		}
+		if _, err := loadStoresConfigBytes(raw); err != nil {
+			return finish(applyStatusNeedsAttention, "preview", "修复 stores config 后重新运行 preview", err)
+		}
+		opts.storesConfigSnapshot = append([]byte(nil), raw...)
 	}
 	evidence.PlanSHA256 = planResource.SHA256
 	if countPlanErrors(plan, selectedStoreSet) > 0 {

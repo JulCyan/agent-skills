@@ -3,6 +3,8 @@ package shopifyadmin
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,8 +108,22 @@ func NewShopifyClient(httpClient *http.Client, options ...ClientOption) *Shopify
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	clientCopy := *httpClient
+	upstreamRedirectCheck := clientCopy.CheckRedirect
+	clientCopy.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) > 0 && (request.URL.Scheme != via[0].URL.Scheme || request.URL.Host != via[0].URL.Host) {
+			return http.ErrUseLastResponse
+		}
+		if upstreamRedirectCheck != nil {
+			return upstreamRedirectCheck(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
 	client := &ShopifyClient{
-		httpClient:  httpClient,
+		httpClient:  &clientCopy,
 		cache:       map[string]oauthToken{},
 		localeCache: map[string][]ShopLocale{},
 		oauthEndpoint: func(store Store) string {
@@ -134,6 +150,9 @@ func EnvSuffix(storeID string) string {
 }
 
 func (c *ShopifyClient) AdminToken(ctx context.Context, store Store) (string, error) {
+	if err := config.ValidateShopifyStore(store.ShopifyStore); err != nil {
+		return "", err
+	}
 	suffix := EnvSuffix(store.ID)
 	psClientID := os.Getenv("SHOPIFY_CLIENT_ID_" + suffix)
 	psClientSecret := os.Getenv("SHOPIFY_CLIENT_SECRET_" + suffix)
@@ -334,18 +353,45 @@ func (c *ShopifyClient) createStagedUploadForType(ctx context.Context, store Sto
 }
 
 func (c *ShopifyClient) UploadToStagedTarget(ctx context.Context, target StagedTarget, resource ResourceInfo) error {
-	file, err := os.Open(resource.Path)
+	sourceInfo, err := os.Lstat(resource.Path)
 	if err != nil {
 		return err
 	}
-	info, err := file.Stat()
+	if !sourceInfo.Mode().IsRegular() {
+		return fmt.Errorf("staged upload resource must be a regular file: %s", resource.Path)
+	}
+	source, err := os.Open(resource.Path)
 	if err != nil {
+		return err
+	}
+	defer source.Close()
+	file, err := os.CreateTemp("", "shopify-media-sync-upload-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	hash := sha256.New()
+	bytesCopied, err := io.Copy(io.MultiWriter(file, hash), source)
+	if err != nil {
+		file.Close()
+		return err
+	}
+	actualSHA := hex.EncodeToString(hash.Sum(nil))
+	if resource.SHA256 != "" && !strings.EqualFold(resource.SHA256, actualSHA) {
+		file.Close()
+		return fmt.Errorf("resource SHA drift before staged upload: expected %s got %s", resource.SHA256, actualSHA)
+	}
+	if resource.Bytes > 0 && resource.Bytes != bytesCopied {
+		file.Close()
+		return fmt.Errorf("resource byte size drift before staged upload: expected %d got %d", resource.Bytes, bytesCopied)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		file.Close()
 		return err
 	}
 	pipeReader, pipeWriter := io.Pipe()
 	writer := multipart.NewWriter(pipeWriter)
-	contentLength, err := stagedMultipartContentLength(target, filepath.Base(resource.Path), writer.Boundary(), info.Size())
+	contentLength, err := stagedMultipartContentLength(target, filepath.Base(resource.Path), writer.Boundary(), bytesCopied)
 	if err != nil {
 		pipeReader.Close()
 		pipeWriter.Close()

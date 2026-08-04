@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
+import { execFile } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const credentialPatterns = [
   new RegExp(['sh', 'pat', '_[A-Za-z0-9_-]{8,}'].join(''), 'g'),
@@ -29,7 +33,6 @@ const internalEvidencePatterns = [
   new RegExp(['\\.', 'agent-', 'runtime', '/'].join(''), 'g'),
 ];
 
-const tokenPattern = /[\p{L}\p{N}][\p{L}\p{N}_-]*/gu;
 const emailPattern = /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi;
 
 export async function loadPolicy(policyURL) {
@@ -142,15 +145,13 @@ function scanProjectSkillLock(relativePath, body, findings) {
 }
 
 function scanBody(relativePath, body, policy, forbiddenTokens, findings) {
-  const forbidden = new Set(
-    forbiddenTokens.map((value) => value.normalize('NFKC').toLowerCase()).filter(Boolean),
-  );
-  for (const match of body.matchAll(tokenPattern)) {
-    const normalized = match[0].normalize('NFKC').toLowerCase();
-    if (forbidden.has(normalized)) {
-      addFinding(findings, relativePath, 'operator-forbidden-token');
-      break;
-    }
+  const normalizedBody = body.normalize('NFKC').toLowerCase();
+  const normalizedPath = relativePath.normalize('NFKC').toLowerCase();
+  const forbidden = forbiddenTokens
+    .map((value) => value.normalize('NFKC').toLowerCase())
+    .filter(Boolean);
+  if (forbidden.some((value) => normalizedBody.includes(value) || normalizedPath.includes(value))) {
+    addFinding(findings, relativePath, 'operator-forbidden-token');
   }
 
   if (containsPattern(body, credentialPatterns)) {
@@ -177,6 +178,24 @@ function scanBody(relativePath, body, policy, forbiddenTokens, findings) {
   scanProjectSkillLock(relativePath, body, findings);
 }
 
+function scanEntry(relativePath, buffer, policy, forbiddenTokens, findings) {
+  if (isSensitiveFilename(relativePath)) {
+    addFinding(findings, relativePath, 'forbidden-sensitive-file');
+    return;
+  }
+  if (looksBinary(buffer)) {
+    const normalizedPath = relativePath.normalize('NFKC').toLowerCase();
+    const matchesPath = forbiddenTokens.some((value) =>
+      normalizedPath.includes(value.normalize('NFKC').toLowerCase()),
+    );
+    if (matchesPath) {
+      addFinding(findings, relativePath, 'operator-forbidden-token');
+    }
+    return;
+  }
+  scanBody(relativePath, buffer.toString('utf8'), policy, forbiddenTokens, findings);
+}
+
 function parseForbiddenTokens(value) {
   return value
     .split(/[\n,]/u)
@@ -194,16 +213,90 @@ export async function scanPaths(root, policy, options = {}) {
   const findings = [];
 
   for (const relativePath of files.sort()) {
-    if (isSensitiveFilename(relativePath)) {
-      addFinding(findings, relativePath, 'forbidden-sensitive-file');
-      continue;
-    }
     const buffer = await readFile(path.join(absoluteRoot, relativePath));
-    if (!looksBinary(buffer)) {
-      scanBody(relativePath, buffer.toString('utf8'), policy, forbiddenTokens, findings);
-    }
+    scanEntry(relativePath, buffer, policy, forbiddenTokens, findings);
   }
 
+  return findings.sort((left, right) =>
+    `${left.path}:${left.rule}`.localeCompare(`${right.path}:${right.rule}`),
+  );
+}
+
+export async function scanGitIndex(root, policy, options = {}) {
+  const absoluteRoot = path.resolve(root);
+  const forbiddenTokens =
+    options.forbiddenTokens ??
+    parseForbiddenTokens(process.env[policy.forbiddenTokenEnvironment] ?? '');
+  let staged;
+  try {
+    ({ stdout: staged } = await execFileAsync(
+      'git',
+      ['ls-files', '--stage', '-z'],
+      { cwd: absoluteRoot, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 },
+    ));
+  } catch (error) {
+    if (error.code === 128) {
+      return [];
+    }
+    throw error;
+  }
+
+  const findings = [];
+  const records = staged.toString('utf8').split('\0').filter(Boolean);
+  for (const record of records) {
+    const tab = record.indexOf('\t');
+    if (tab < 0) {
+      continue;
+    }
+    const header = record.slice(0, tab).split(' ');
+    const relativePath = record.slice(tab + 1);
+    const objectID = header[1];
+    if (!/^[a-f0-9]{40,64}$/u.test(objectID ?? '')) {
+      continue;
+    }
+    const { stdout: buffer } = await execFileAsync('git', ['cat-file', 'blob', objectID], {
+      cwd: absoluteRoot,
+      encoding: 'buffer',
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    scanEntry(relativePath, buffer, policy, forbiddenTokens, findings);
+  }
+
+  return findings.sort((left, right) =>
+    `${left.path}:${left.rule}`.localeCompare(`${right.path}:${right.rule}`),
+  );
+}
+
+export async function scanGitMetadata(root, policy, options = {}) {
+  const absoluteRoot = path.resolve(root);
+  const forbiddenTokens =
+    options.forbiddenTokens ??
+    parseForbiddenTokens(process.env[policy.forbiddenTokenEnvironment] ?? '');
+  let body;
+  try {
+    const outputs = await Promise.all([
+      execFileAsync('git', ['log', '--format=%an%n%ae%n%B'], { cwd: absoluteRoot }),
+      execFileAsync('git', ['branch', '--show-current'], { cwd: absoluteRoot }),
+      execFileAsync('git', ['remote', '-v'], { cwd: absoluteRoot }),
+    ]);
+    const remoteBody = sanitizeSSHRemoteSyntax(outputs[2].stdout);
+    body = `${outputs[0].stdout}\n${outputs[1].stdout}\n${remoteBody}`;
+  } catch (error) {
+    if (error.code === 128) {
+      return [];
+    }
+    throw error;
+  }
+  return scanMetadataText('<git-metadata>', body, policy, forbiddenTokens);
+}
+
+function sanitizeSSHRemoteSyntax(body) {
+  return body.replace(/\b[A-Za-z0-9._-]+@([A-Za-z0-9.-]+):/gu, 'ssh://$1/');
+}
+
+export function scanMetadataText(label, body, policy, forbiddenTokens = []) {
+  const findings = [];
+  scanBody(label, sanitizeSSHRemoteSyntax(body), policy, forbiddenTokens, findings);
   return findings.sort((left, right) =>
     `${left.path}:${left.rule}`.localeCompare(`${right.path}:${right.rule}`),
   );
@@ -218,7 +311,31 @@ async function main() {
     throw new Error('--root requires a path');
   }
 
-  const findings = await scanPaths(root, await loadPolicy(pathToFileURL(policyPath)));
+  const policy = await loadPolicy(pathToFileURL(policyPath));
+  const scans = await Promise.all([
+    scanPaths(root, policy),
+    scanGitIndex(root, policy),
+    scanGitMetadata(root, policy),
+  ]);
+  const externalMetadataPath = process.env.GITHUB_EVENT_PATH;
+  if (externalMetadataPath) {
+    const body = await readFile(externalMetadataPath, 'utf8');
+    scans.push(
+      scanMetadataText(
+        '<github-event>',
+        body,
+        policy,
+        parseForbiddenTokens(process.env[policy.forbiddenTokenEnvironment] ?? ''),
+      ),
+    );
+  }
+  const findings = scans
+    .flat()
+    .filter(
+      (finding, index, all) =>
+        all.findIndex((candidate) => candidate.path === finding.path && candidate.rule === finding.rule) === index,
+    )
+    .sort((left, right) => `${left.path}:${left.rule}`.localeCompare(`${right.path}:${right.rule}`));
   if (findings.length > 0) {
     process.stderr.write(`${JSON.stringify({ status: 'BLOCKED', findings }, null, 2)}\n`);
     process.exitCode = 1;

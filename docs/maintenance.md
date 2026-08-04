@@ -19,3 +19,7 @@ The verifier returns `MATCH`, `DRIFT`, or `NEEDS_SETUP`. Fixes are made here,
 validated from a fresh tracked snapshot, and then installed into consumers at
 an explicit reviewed ref. Installed copies are not edited as a substitute for
 provider changes.
+
+The current verifier checks the Skills CLI universal copy at
+`.agents/skills/<skill-name>`. Agent-specific symlinks or projections are owned
+by the Skills CLI and are not independent provider copies.

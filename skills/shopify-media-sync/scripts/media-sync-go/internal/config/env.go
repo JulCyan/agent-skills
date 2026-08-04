@@ -3,8 +3,11 @@ package config
 import (
 	"bufio"
 	"os"
+	"regexp"
 	"strings"
 )
+
+var supportedDotEnvKeyRE = regexp.MustCompile(`^SHOPIFY_(?:CLIENT_ID|CLIENT_SECRET|ADMIN_TOKEN|API_VERSION)(?:_[A-Z0-9_]+)?$`)
 
 func LoadDotEnv(path string) error {
 	values, err := ReadDotEnv(path)
@@ -12,6 +15,9 @@ func LoadDotEnv(path string) error {
 		return err
 	}
 	for key, value := range values {
+		if !supportedDotEnvKeyRE.MatchString(key) {
+			continue
+		}
 		if _, exists := os.LookupEnv(key); !exists {
 			_ = os.Setenv(key, value)
 		}

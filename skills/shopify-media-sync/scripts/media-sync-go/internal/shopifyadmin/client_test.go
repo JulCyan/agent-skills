@@ -6,6 +6,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,62 @@ func TestGraphQLMutationDoesNotRetryAmbiguousTransportFailure(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("mutation transport ambiguity retried %d times", requests)
+	}
+}
+
+func TestGraphQLRejectsUnsafeShopifyStoreBeforeRequest(t *testing.T) {
+	t.Setenv("SHOPIFY_ADMIN_TOKEN", "test-token")
+	requests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return nil, nil
+	})}
+	client := NewShopifyClient(httpClient)
+	_, err := client.GraphQL(
+		t.Context(),
+		Store{ID: "store-a", ShopifyStore: "evil.example/collect?x="},
+		`query Test { shop { id } }`,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "shopifyStore") {
+		t.Fatalf("expected unsafe shopifyStore rejection, got %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("unsafe shopifyStore reached HTTP transport: %d requests", requests)
+	}
+}
+
+func TestGraphQLDoesNotFollowCrossOriginRedirectWithToken(t *testing.T) {
+	t.Setenv("SHOPIFY_ADMIN_TOKEN", "test-token")
+	redirectedRequests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		redirectedRequests++
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	client := NewShopifyClient(
+		nil,
+		WithEndpoints(
+			func(Store) string { return source.URL },
+			func(Store) string { return source.URL },
+		),
+	)
+	_, err := client.GraphQL(
+		t.Context(),
+		Store{ID: "store-a", ShopifyStore: "store-a"},
+		`query Test { shop { id } }`,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected cross-origin redirect to fail closed")
+	}
+	if redirectedRequests != 0 {
+		t.Fatalf("cross-origin redirect received Shopify token: %d requests", redirectedRequests)
 	}
 }
 
@@ -93,6 +150,29 @@ func TestUploadToStagedTargetStreamsMultipartBody(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUploadToStagedTargetRejectsResourceHashDriftBeforeHTTP(t *testing.T) {
+	resourcePath := filepath.Join(t.TempDir(), "asset.svg")
+	if err := os.WriteFile(resourcePath, []byte("changed-after-plan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	client := NewShopifyClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return nil, nil
+	})})
+	err := client.UploadToStagedTarget(t.Context(), StagedTarget{URL: "https://upload.shopify.test"}, ResourceInfo{
+		Path:     resourcePath,
+		Filename: "asset.svg",
+		SHA256:   strings.Repeat("0", 64),
+	})
+	if err == nil || !strings.Contains(err.Error(), "SHA") {
+		t.Fatalf("expected resource SHA drift rejection, got %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("drifted resource reached staged upload: %d requests", requests)
 	}
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -128,5 +128,54 @@ test(
     const report = JSON.parse(doctorOutput);
     assert.equal(report.command, 'doctor');
     assert.equal(report.capabilities.local_input.available, true);
+
+    await mkdir(path.join(caller, 'images'));
+    await writeFile(
+      path.join(caller, 'stores.config.json'),
+      `${JSON.stringify({
+        stores: [
+          {
+            id: 'store-demo',
+            label: 'Demo',
+            shopifyStore: 'store-demo',
+            primaryLocale: 'en',
+            enabled: true,
+          },
+        ],
+      })}\n`,
+    );
+    await writeFile(
+      path.join(caller, 'media.csv'),
+      '序号,source图片名,target图片文件名,en\n1,asset.svg,asset.svg,Synthetic alt\n',
+    );
+    await writeFile(
+      path.join(caller, 'images', 'asset.svg'),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>\n',
+    );
+
+    await execFileAsync(
+      wrapper,
+      [
+        'plan',
+        '--input',
+        'media.csv',
+        '--source-root',
+        'images',
+        '--stores',
+        'all',
+        '--out-dir',
+        'run',
+      ],
+      { cwd: caller, env: runtimeEnvironment, maxBuffer: 1024 * 1024 },
+    );
+    const { stdout: inspectOutput } = await execFileAsync(
+      wrapper,
+      ['inspect', '--plan', 'run/plan.json', '--format', 'json'],
+      { cwd: caller, env: runtimeEnvironment, maxBuffer: 1024 * 1024 },
+    );
+    const inspection = JSON.parse(inspectOutput);
+    assert.equal(inspection.run_id.length > 0, true);
+    assert.match(inspection.plan_path, /run\/plan\.json$/);
+    assert.match(inspection.plan_sha256, /^[a-f0-9]{64}$/);
   },
 );

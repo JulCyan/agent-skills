@@ -61,8 +61,8 @@ func TestRemoteEnvAutoDiscoveryStartsFromCallerPathBase(t *testing.T) {
 	if err := os.MkdirAll(callerDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	const key = "MEDIA_SYNC_AUTODISCOVERY_TEST"
-	const value = "from-caller-project"
+	const key = "SHOPIFY_API_VERSION"
+	const value = "2026-07"
 	if err := os.WriteFile(filepath.Join(projectRoot, ".env.local"), []byte(key+"="+value+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

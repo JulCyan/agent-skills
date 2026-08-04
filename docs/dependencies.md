@@ -2,12 +2,16 @@
 
 ## Required for repository validation
 
-- Node.js 20.19 or newer
+- Node.js 22.20 or newer for full repository validation
 - Go 1.25.1, as declared by the bundled module
 - `npx skills@1.5.21` for reproducible discovery and copy-install checks
 - `@fission-ai/openspec@1.7.0` for strict OpenSpec validation
 
 The bundled Go module currently uses only the Go standard library.
+
+The installed portable launcher itself supports Node.js 20.19 or newer. The
+higher repository requirement comes from the pinned Skills CLI used by the
+acceptance suite, not from the launcher.
 
 ## Optional runtime dependency
 

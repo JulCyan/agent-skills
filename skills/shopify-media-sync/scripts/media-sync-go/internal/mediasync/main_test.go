@@ -18,6 +18,36 @@ import (
 	"time"
 )
 
+// runDirectStageForTest keeps lower-level mutation algorithms covered while
+// the public CLI deliberately exposes remote writes only through apply.
+func runDirectStageForTest(ctx context.Context, args []string, stdout io.Writer) error {
+	opts, err := parseCommand(args)
+	if err != nil {
+		return err
+	}
+	execute := opts.execute
+	opts.execute = false
+	if err := validateCommandOptions(opts); err != nil {
+		return err
+	}
+	opts.execute = execute
+	opts = resolveCommandPaths(opts)
+	switch opts.command {
+	case "upload":
+		return runUpload(ctx, stdout, opts)
+	case "alt":
+		return runAlt(ctx, stdout, opts)
+	case "video-copy":
+		return runVideoCopy(ctx, stdout, opts)
+	case "verify":
+		return runVerify(ctx, stdout, opts)
+	case "sync-status":
+		return runSyncStatus(ctx, stdout, opts)
+	default:
+		return fmt.Errorf("unsupported direct test stage: %s", opts.command)
+	}
+}
+
 func TestDesiredFromCSVNormalizesMinimalOpsSheet(t *testing.T) {
 	raw := []byte("序号,source图片名,target图片文件名,en,de,jp,fr\n1,old.png,new.png,English alt,Deutsch alt,日本語 alt,French alt\n2,same.png,,Same English alt,,,\n")
 	rows, err := parseCSVRows(raw)
@@ -325,7 +355,7 @@ func TestVideoCopyRejectsDuplicateExactFilenameCandidatesWithoutURL(t *testing.T
 	}
 }
 
-func TestVideoCopyExecuteRequiresExplicitNonAllStores(t *testing.T) {
+func TestVideoCopyExecuteIsReservedBehindApplyBinding(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "videos.json")
 	mustWriteJSON(t, manifestPath, []string{"product-video.mp4"})
@@ -333,8 +363,8 @@ func TestVideoCopyExecuteRequiresExplicitNonAllStores(t *testing.T) {
 		"video-copy", "--from-store", "us", "--video-manifest", manifestPath,
 		"--stores-config", filepath.Join("testdata", "stores.config.json"), "--execute", "--no-env-file",
 	}, ioDiscard{})
-	if err == nil || !strings.Contains(err.Error(), "显式指定非 all") {
-		t.Fatalf("expected explicit non-all --stores guard, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "不接受 --execute") {
+		t.Fatalf("expected direct execute rejection, got %v", err)
 	}
 }
 
@@ -408,7 +438,7 @@ func TestVideoCopyExecuteUploadsMissingVideoAndWritesVerifiedReceipt(t *testing.
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "videos.json")
 	mustWriteJSON(t, manifestPath, []string{"product-video.mp4"})
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"video-copy", "--from-store", "us", "--stores", "de",
 		"--stores-config", filepath.Join("testdata", "stores.config.json"),
 		"--video-manifest", manifestPath, "--out-dir", filepath.Join(dir, "run"),
@@ -1404,6 +1434,33 @@ func TestValidateUploadConcurrencyBounds(t *testing.T) {
 	}
 }
 
+func TestDirectCommandsCannotExecuteRemoteWrites(t *testing.T) {
+	cases := [][]string{
+		{"upload", "--execute"},
+		{"alt", "--execute"},
+		{"video-copy", "--from-store", "store-us", "--video-manifest", "videos.json", "--stores", "store-de", "--execute"},
+	}
+	for _, args := range cases {
+		opts, err := parseCommand(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCommandOptions(opts); err == nil || !strings.Contains(err.Error(), "apply") {
+			t.Fatalf("direct command %q accepted remote execution: %v", args[0], err)
+		}
+	}
+}
+
+func TestAllCommandsRejectImplicitResumeLast(t *testing.T) {
+	opts, err := parseCommand([]string{"upload", "--resume", "last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCommandOptions(opts); err == nil || !strings.Contains(err.Error(), "--resume") {
+		t.Fatalf("implicit resume was accepted: %v", err)
+	}
+}
+
 func TestUploadCheckpointFailureStartsNoWorkers(t *testing.T) {
 	setTestAdminToken(t, "store-us")
 	dir := t.TempDir()
@@ -1961,7 +2018,7 @@ func TestRemoteCommandsRejectArchivedDevelopmentStoreWithoutExplicitShopifyStore
 			if tc.execute {
 				args = append(args, "--execute")
 			}
-			err := run(t.Context(), args, ioDiscard{})
+			err := runDirectStageForTest(t.Context(), args, ioDiscard{})
 			if err == nil {
 				t.Fatal("expected archived store target guard error")
 			}
@@ -2085,7 +2142,7 @@ func TestRemoteCommandsRejectUnknownDevelopmentPlanStore(t *testing.T) {
 			if tc.execute {
 				args = append(args, "--execute")
 			}
-			err := run(t.Context(), args, ioDiscard{})
+			err := runDirectStageForTest(t.Context(), args, ioDiscard{})
 			if err == nil {
 				t.Fatal("expected unknown development store target guard error")
 			}
@@ -2162,7 +2219,7 @@ func TestRemoteCommandsRejectUnknownNonDevelopmentPlanStoreBeforeEnv(t *testing.
 			if tc.execute {
 				args = append(args, "--execute")
 			}
-			err := run(t.Context(), args, ioDiscard{})
+			err := runDirectStageForTest(t.Context(), args, ioDiscard{})
 			if err == nil {
 				t.Fatal("expected unknown store target guard error")
 			}
@@ -2378,7 +2435,7 @@ func TestExecutionStoresFilterNarrowsChanges(t *testing.T) {
 		},
 	})
 	var stdout bytes.Buffer
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"upload",
 		"--plan", planPath,
 		"--stores-config", filepath.Join("testdata", "stores.config.json"),
@@ -2436,7 +2493,7 @@ func TestRunSyncStatusHonorsStoreFilter(t *testing.T) {
 	}}})
 
 	var stdout bytes.Buffer
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"sync-status",
 		"--plan", planPath,
 		"--evidence", evidencePath,
@@ -2555,7 +2612,7 @@ func TestRunUploadConcurrentWritesEvidenceAndMetricsForFailures(t *testing.T) {
 		},
 	})
 	var stdout bytes.Buffer
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"upload",
 		"--plan", planPath,
 		"--evidence", evidencePath,
@@ -2674,7 +2731,7 @@ func TestRunUploadContinuesAnotherMutationWhileWorkerWaitsForReadback(t *testing
 		},
 	})
 
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"upload",
 		"--plan", planPath,
 		"--evidence", evidencePath,
@@ -2696,6 +2753,10 @@ func TestRunUploadContinuesAnotherMutationWhileWorkerWaitsForReadback(t *testing
 
 func TestRunUploadPreservesMutationFileIDWhenPollFails(t *testing.T) {
 	setTestAdminToken(t, "store-us")
+	fixture, err := inspectResource(filepath.Join("testdata", "images", "same.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name        string
 		action      string
@@ -2712,7 +2773,7 @@ func TestRunUploadPreservesMutationFileIDWhenPollFails(t *testing.T) {
 			mutation: "fileCreate",
 			nodeID:   "gid://shopify/MediaImage/pending-create",
 			target:   "pending-create.svg",
-			wantSHA:  "sha-create",
+			wantSHA:  fixture.SHA256,
 		},
 		{
 			name:     "replace",
@@ -2729,7 +2790,7 @@ func TestRunUploadPreservesMutationFileIDWhenPollFails(t *testing.T) {
 				Status:         "READY",
 			}},
 			target:  "pending-replace.svg",
-			wantSHA: "sha-replace",
+			wantSHA: fixture.SHA256,
 		},
 	}
 
@@ -2792,7 +2853,7 @@ func TestRunUploadPreservesMutationFileIDWhenPollFails(t *testing.T) {
 			if len(tt.initial) > 0 {
 				mustWriteJSON(t, evidencePath, Evidence{RunID: "run-test", Results: tt.initial})
 			}
-			err := run(t.Context(), []string{
+			err := runDirectStageForTest(t.Context(), []string{
 				"upload",
 				"--plan", planPath,
 				"--evidence", evidencePath,
@@ -2856,9 +2917,13 @@ func TestUploadMutationTransportAmbiguityRequiresAttention(t *testing.T) {
 			return http.StatusInternalServerError, `{}`
 		}
 	})
+	resource, err := inspectResource(filepath.Join("testdata", "images", "same.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	change := PlanChange{
 		Store: "store-us", RowNo: "1", SourceFilename: "same.svg", TargetFilename: "same.svg",
-		Actions: []string{"file_upload_same_filename"}, Resource: &ResourceInfo{Path: filepath.Join("testdata", "images", "same.svg"), Filename: "same.svg", SHA256: "sha"},
+		Actions: []string{"file_upload_same_filename"}, Resource: &resource,
 	}
 	result := executeUploadJob(t.Context(), uploadJob{change: change}, func(string) Store {
 		return Store{ID: "store-us", ShopifyStore: "store-us"}
@@ -2993,14 +3058,14 @@ func TestFindFileByFilenameQuotesSearchAndMatchesExactBasename(t *testing.T) {
 		gotQuery, _ = body.Variables["query"].(string)
 		return http.StatusOK, `{"data":{"files":{"nodes":[
 			{"id":"gid://shopify/MediaImage/wrong","fileStatus":"READY","alt":"Wrong","image":{"url":"https://cdn.shopify.com/s/files/1/files/other.png","width":120,"height":80}},
-			{"id":"gid://shopify/MediaImage/right","fileStatus":"READY","alt":"Right","image":{"url":"https://cdn.shopify.com/s/files/1/files/rotary%20axis%20(v2)%3Ahero.png?v=1","width":120,"height":80}}
+			{"id":"gid://shopify/MediaImage/right","fileStatus":"READY","alt":"Right","image":{"url":"https://cdn.shopify.com/s/files/1/files/synthetic%20sample%20(v2)%3Ahero.png?v=1","width":120,"height":80}}
 		]}}}`
 	})
-	node, err := client.FindFileByFilename(t.Context(), Store{ID: "store-us", ShopifyStore: "store-us"}, "rotary axis (v2):hero.png")
+	node, err := client.FindFileByFilename(t.Context(), Store{ID: "store-us", ShopifyStore: "store-us"}, "synthetic sample (v2):hero.png")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotQuery != `filename:"rotary axis (v2):hero.png"` {
+	if gotQuery != `filename:"synthetic sample (v2):hero.png"` {
 		t.Fatalf("filename search should be quoted, got %q", gotQuery)
 	}
 	if node.ID != "gid://shopify/MediaImage/right" {
@@ -3111,7 +3176,7 @@ func TestRunVerifyDoesNotWriteSuccessWithoutImageMetadata(t *testing.T) {
 		TargetFilename: "same.png",
 		FileID:         "gid://shopify/MediaImage/1",
 	}}})
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"verify",
 		"--plan", planPath,
 		"--evidence", evidencePath,
@@ -3219,7 +3284,7 @@ func TestRunVerifyDoesNotWriteSuccessWhenAltReadbackMismatches(t *testing.T) {
 		TargetFilename: "same.png",
 		FileID:         "gid://shopify/MediaImage/1",
 	}}})
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"verify",
 		"--plan", planPath,
 		"--evidence", evidencePath,
@@ -3695,7 +3760,7 @@ func TestRunAltRequiresReadyImageMetadataBeforeSuccess(t *testing.T) {
 		TargetFilename: "same.png",
 		FileID:         "gid://shopify/MediaImage/1",
 	}}})
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"alt",
 		"--plan", planPath,
 		"--evidence", evidencePath,
@@ -3806,7 +3871,7 @@ func TestRunAltContinuesAfterRowFailure(t *testing.T) {
 			FileID:         "gid://shopify/MediaImage/2",
 		},
 	}})
-	err := run(t.Context(), []string{
+	err := runDirectStageForTest(t.Context(), []string{
 		"alt",
 		"--plan", planPath,
 		"--evidence", evidencePath,

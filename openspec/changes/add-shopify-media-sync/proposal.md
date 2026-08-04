@@ -18,7 +18,8 @@ that works for technical and non-technical consumers through `npx skills`.
 
 ## Scope
 
-- GitHub-source installation through `npx skills@1.5.21`.
+- GitHub-source installation through `npx skills`; acceptance pins
+  `skills@1.5.21` for reproducibility.
 - Local CSV, XLSX, JSON, zip, and directory inputs.
 - Optional Lark/Feishu Sheet and Drive inputs when `lark-cli` is available.
 - Shopify Files plan, preview, explicit execute, inspect, readback, and recovery.

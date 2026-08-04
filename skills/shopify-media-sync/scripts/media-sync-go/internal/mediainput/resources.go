@@ -34,6 +34,12 @@ type ResourceInfo struct {
 	Height   int    `json:"height,omitempty"`
 }
 
+const (
+	maxResourceZipFiles             = 10_000
+	maxResourceZipEntryUncompressed = 4 << 30
+	maxResourceZipTotalUncompressed = 8 << 30
+)
+
 func BuildResourceIndex(sourceRoot, zipPath, downloadsDir string) (ResourceIndex, error) {
 	index := ResourceIndex{Files: map[string]ResourceInfo{}, Duplicates: map[string][]string{}}
 	if zipPath != "" {
@@ -80,20 +86,45 @@ func BuildResourceIndex(sourceRoot, zipPath, downloadsDir string) (ResourceIndex
 }
 
 func extractZip(zipPath, destRoot string) error {
-	if err := os.RemoveAll(destRoot); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destRoot), 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+	if err := os.Mkdir(destRoot, 0o700); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("zip extraction destination already exists; refusing to replace it: %s", destRoot)
+		}
 		return err
 	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = os.RemoveAll(destRoot)
+		}
+	}()
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
+	if len(reader.File) > maxResourceZipFiles {
+		return fmt.Errorf("zip contains too many entries: %d > %d", len(reader.File), maxResourceZipFiles)
+	}
+	var totalUncompressed uint64
+	for _, file := range reader.File {
+		if file.UncompressedSize64 > maxResourceZipEntryUncompressed {
+			return fmt.Errorf("zip entry exceeds uncompressed size limit: %s", file.Name)
+		}
+		totalUncompressed += file.UncompressedSize64
+		if totalUncompressed > maxResourceZipTotalUncompressed {
+			return fmt.Errorf("zip exceeds total uncompressed size limit")
+		}
+	}
 	for _, file := range reader.File {
 		if file.FileInfo().IsDir() {
 			continue
+		}
+		if !file.Mode().IsRegular() {
+			return fmt.Errorf("zip contains non-regular entry: %s", file.Name)
 		}
 		cleanName := filepath.Clean(file.Name)
 		if filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) || cleanName == ".." {
@@ -107,7 +138,7 @@ func extractZip(zipPath, destRoot string) error {
 		if err != nil {
 			return err
 		}
-		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
+		dst, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			src.Close()
 			return err
@@ -122,10 +153,18 @@ func extractZip(zipPath, destRoot string) error {
 			return closeErr
 		}
 	}
+	completed = true
 	return nil
 }
 
 func InspectResource(path string) (ResourceInfo, error) {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return ResourceInfo{}, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return ResourceInfo{}, fmt.Errorf("resource must be a regular file, got mode %s: %s", pathInfo.Mode(), path)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return ResourceInfo{}, err

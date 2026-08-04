@@ -12,7 +12,10 @@ import (
 
 const DefaultShopifyAPIVersion = "2026-01"
 
-var shopifyAPIVersionRE = regexp.MustCompile(`^[0-9]{4}-(01|04|07|10)$`)
+var (
+	shopifyAPIVersionRE = regexp.MustCompile(`^[0-9]{4}-(01|04|07|10)$`)
+	shopifyStoreRE      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+)
 
 type StoresConfig struct {
 	Stores   []Store `json:"stores"`
@@ -70,24 +73,44 @@ func LoadStoresConfig(configPath string) (StoresConfig, error) {
 	if err != nil {
 		return StoresConfig{}, fmt.Errorf("读取 stores config 失败: %w", err)
 	}
+	return LoadStoresConfigBytes(raw)
+}
+
+// LoadStoresConfigBytes validates one immutable stores configuration snapshot.
+func LoadStoresConfigBytes(raw []byte) (StoresConfig, error) {
 	var cfg StoresConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return StoresConfig{}, fmt.Errorf("解析 stores config 失败: %w", err)
 	}
 	for i := range cfg.Stores {
 		cfg.Stores[i].Normalize()
+		if err := ValidateShopifyStore(cfg.Stores[i].ShopifyStore); err != nil {
+			return StoresConfig{}, fmt.Errorf("store %s shopifyStore: %w", cfg.Stores[i].ID, err)
+		}
 		if err := ValidateShopifyAPIVersion(cfg.Stores[i].APIVersion); err != nil {
 			return StoresConfig{}, fmt.Errorf("store %s apiVersion: %w", cfg.Stores[i].ID, err)
 		}
 	}
 	for i := range cfg.Archived {
 		cfg.Archived[i].Normalize()
+		if err := ValidateShopifyStore(cfg.Archived[i].ShopifyStore); err != nil {
+			return StoresConfig{}, fmt.Errorf("archived store %s shopifyStore: %w", cfg.Archived[i].ID, err)
+		}
 		if err := ValidateShopifyAPIVersion(cfg.Archived[i].APIVersion); err != nil {
 			return StoresConfig{}, fmt.Errorf("archived store %s apiVersion: %w", cfg.Archived[i].ID, err)
 		}
 		cfg.Archived[i].Archived = true
 	}
 	return cfg, nil
+}
+
+// ValidateShopifyStore accepts only a Shopify myshopify.com subdomain handle.
+// It deliberately rejects URLs, paths, dots, ports, and mixed-case host input.
+func ValidateShopifyStore(handle string) error {
+	if !shopifyStoreRE.MatchString(handle) {
+		return fmt.Errorf("shopifyStore %q must be a lowercase myshopify.com handle (1-63 letters, digits, or interior hyphens)", handle)
+	}
+	return nil
 }
 
 func ValidateShopifyAPIVersion(version string) error {

@@ -8,7 +8,7 @@
 系统 SHALL 让 `npx skills add <repo> --list` 只发现公开产品 Skill。
 
 #### Scenario: 列出仓库 Skills
-- **WHEN** 用户对仓库运行 `npx skills@1.5.21 add . --list`
+- **WHEN** 用户对仓库运行 `npx skills add . --list`
 - **THEN** 列表只包含 `shopify-media-sync`
 
 ### Requirement: 安装副本必须自包含
@@ -36,8 +36,9 @@ CLI 生成的 lockfile，并可校验安装目录 hash。
 - **THEN** verifier 返回 `DRIFT` 且不修改安装副本
 
 ### Requirement: 公开内容必须通过门禁
-仓库 SHALL 检查 credential pattern、个人绝对路径、真实目标 ID、非许可 email domain、
-本地 provider lockfile 与运行时提供的禁止标识；命中时必须非零退出且不打印值。
+仓库 SHALL 检查 working tree、Git index blobs/path、Git metadata 与 PR event metadata 中的
+credential pattern、个人绝对路径、真实目标 ID、非许可 email domain、本地 provider
+lockfile 与运行时提供的禁止标识；命中时必须非零退出且不打印值。
 
 #### Scenario: 运行时禁止标识命中
 - **WHEN** tracked file 包含 `AGENT_SKILLS_FORBIDDEN_TOKENS` 提供的任一 token

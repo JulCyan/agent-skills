@@ -13,7 +13,8 @@ unknown artifact. When no trusted executor exists it returns `NEEDS_SETUP`.
 
 ## Execution contract
 
-Normal operation is `plan -> apply preview -> apply --execute`. Execute binds
+Normal operation is `plan -> apply preview -> apply --execute`. Direct
+`upload`, `alt`, and `video-copy` execution is disabled. Execute binds
 the exact plan SHA, selected stores, store configuration identity, rows, and
 actions reviewed during preview. Identity drift fails before mutation.
 
@@ -30,8 +31,9 @@ a tracked Git archive so ignored local helpers cannot enter the install set.
 
 ## Public-content contract
 
-Committed policy contains generic credential, path, target-ID, email, lockfile,
-and runtime-evidence checks. A maintainer supplies any private prohibited terms
+Committed policy checks working files, Git index blobs and paths, and Git
+metadata for generic credential, path, target-ID, email, lockfile, and
+runtime-evidence patterns. A maintainer supplies any private prohibited terms
 through `AGENT_SKILLS_FORBIDDEN_TOKENS`; those terms are never committed or
 printed in findings.
 
@@ -39,4 +41,5 @@ printed in findings.
 
 `npm test` runs public scanning, Node tests, the complete Go suite, shell syntax,
 and strict OpenSpec validation. The sandbox test copy-installs from a tracked
-archive and executes `--help` plus JSON `doctor` outside the repository.
+archive and executes `--help`, JSON `doctor`, `plan`, and `inspect` outside the
+repository.

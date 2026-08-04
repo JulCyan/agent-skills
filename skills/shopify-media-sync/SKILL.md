@@ -66,7 +66,9 @@ preview 会把 plan SHA、选定 stores 和 `stores.config.json` 的 path/SHA �
 
 5. 监督到 terminal summary。`apply-summary.json` 是整体 authority，`evidence.json` 是行与阶段恢复 authority；stdout 仅作进度。
 
-仅在兼容排障时直接使用 `upload`、`alt`、`verify`；正常执行必须使用 `plan` + `apply`，不得由 AI 手工串联阶段。
+`upload`、`alt` 只保留只读 preview/兼容排障入口，不接受 `--execute`；`video-copy`
+在具备 plan binding、lease 与阶段 checkpoint 前也不接受远端执行。`verify` 可用于显式
+plan 的只读远端复核。所有写入必须使用 `plan` + `apply`，不得由 AI 手工串联阶段。
 
 ## 冷启动与恢复
 

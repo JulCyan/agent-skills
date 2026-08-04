@@ -31,9 +31,9 @@ Commands:
   plan          Build desired.json and plan.json. Does not write Shopify.
   inspect       Read one explicit plan/evidence/summary and print a stable recovery digest. Never writes Shopify or local artifacts.
   apply         Consume one explicit plan and run upload -> alt -> verify. Writes only with --execute.
-  upload        Execute Shopify Files upload/replacement from plan.json. Writes only with --execute. Defaults to --concurrency 2; supports 1-3.
-  alt           Execute MEDIA_IMAGE alt and translation updates from plan.json. Writes only with --execute.
-  video-copy    Copy named MP4 Shopify Files videos between stores. Writes only with --execute.
+  upload        Preview the upload stage from plan.json. Remote writes are available only through apply --execute.
+  alt           Preview the alt stage from plan.json. Remote writes are available only through apply --execute.
+  video-copy    Preview named MP4 Shopify Files copies. Remote execution is reserved until plan binding is implemented.
   json-replace  Reserved for single template JSON replacement. Requires --execute when implemented.
   verify        Read back Shopify Files / translations and update local evidence.
   sync-status   Write a local status report from plan/evidence. Feishu writeback is still reserved.
@@ -67,22 +67,23 @@ type commandOptions struct {
 	rootPath      string
 	sourceEnv     string
 
-	stores          string
-	storesExplicit  bool
-	locales         string
-	storesConfig    string
-	envFile         string
-	noEnvFile       bool
-	template        string
-	targetTheme     string
-	duplicatePolicy string
-	format          string
-	execute         bool
-	dryRun          bool
-	concurrency     int
-	timeout         time.Duration
-	pollInterval    time.Duration
-	maxAttempts     int
+	stores               string
+	storesExplicit       bool
+	locales              string
+	storesConfig         string
+	storesConfigSnapshot []byte
+	envFile              string
+	noEnvFile            bool
+	template             string
+	targetTheme          string
+	duplicatePolicy      string
+	format               string
+	execute              bool
+	dryRun               bool
+	concurrency          int
+	timeout              time.Duration
+	pollInterval         time.Duration
+	maxAttempts          int
 }
 
 // Run executes the CLI contract against the supplied process boundary.
@@ -182,7 +183,7 @@ func parseCommand(args []string) (commandOptions, error) {
 	fs.StringVar(&opts.zipPath, "zip", "", "local zip resource package")
 	fs.StringVar(&opts.outDir, "out-dir", "", "run output directory")
 	fs.StringVar(&opts.statePath, "state", "", "previous evidence.json")
-	fs.StringVar(&opts.resume, "resume", "", "resume mode; currently supports last")
+	fs.StringVar(&opts.resume, "resume", "", "reserved; implicit latest-plan selection is not supported")
 	fs.StringVar(&opts.jsonReceipt, "json-receipt", "", "verified mapping-level receipt from an external theme JSON workflow")
 	fs.StringVar(&opts.videoManifest, "video-manifest", "", "JSON array of MP4 filenames for video-copy")
 	fs.StringVar(&opts.fromStore, "from-store", "", "source store id for video-copy")
@@ -281,8 +282,11 @@ func validateCommandOptions(opts commandOptions) error {
 	if opts.command != "env-init" && opts.dryRun {
 		return errors.New("--dry-run 只用于 env-init")
 	}
-	if opts.resume != "" && opts.resume != "last" {
-		return fmt.Errorf("--resume 当前只支持 last")
+	if opts.resume != "" {
+		return errors.New("--resume 已禁用；必须显式指定 --plan <plan.json>")
+	}
+	if opts.execute && (opts.command == "upload" || opts.command == "alt" || opts.command == "video-copy") {
+		return fmt.Errorf("%s 不接受 --execute；远端写入只能通过带 preview binding 的 apply --execute", opts.command)
 	}
 	if _, err := parseLocaleFilter(opts.locales); err != nil {
 		return err
@@ -302,9 +306,6 @@ func validateCommandOptions(opts commandOptions) error {
 		}
 		if opts.videoManifest == "" {
 			return errors.New("video-copy 必须指定 --video-manifest <filenames.json>")
-		}
-		if opts.execute && (!opts.storesExplicit || storeSpecMeansAll(opts.stores)) {
-			return errors.New("video-copy --execute 必须显式指定非 all 的 --stores")
 		}
 	}
 	if opts.command == "plan" {

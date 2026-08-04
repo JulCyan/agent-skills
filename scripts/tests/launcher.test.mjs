@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, cp, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, cp, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -120,6 +121,36 @@ test('valid cached release binary is selected and digest mismatch is rejected', 
     }),
     /digest mismatch/,
   );
+});
+
+test('release download cannot overwrite a predictable PID symlink target', async () => {
+  const cacheRoot = await mkdtemp(path.join(os.tmpdir(), 'agent-skills-launcher-symlink-'));
+  const assetName = 'shopify-media-sync-darwin-arm64';
+  const body = Buffer.from('verified-release-binary');
+  const digest = createHash('sha256').update(body).digest('hex');
+  const victim = path.join(cacheRoot, 'victim.txt');
+  await writeFile(victim, 'must-stay-unchanged');
+  await symlink(victim, path.join(cacheRoot, `${assetName}.download-${process.pid}`));
+  const manifest = unpublishedManifest();
+  manifest.release = {
+    status: 'published',
+    tag: 'shopify-media-sync-v0.1.0',
+    assets: {
+      'darwin-arm64': { name: assetName, sha256: digest },
+    },
+  };
+
+  const resolved = await resolveExecutor({
+    manifest,
+    platform: 'darwin',
+    arch: 'arm64',
+    env: { SHOPIFY_MEDIA_SYNC_CACHE_DIR: cacheRoot },
+    commandExists: async () => false,
+    fetchImpl: async () => new Response(body, { status: 200 }),
+  });
+  assert.equal(resolved.source, 'release-download');
+  assert.equal(await readFile(victim, 'utf8'), 'must-stay-unchanged');
+  assert.equal(await sha256File(resolved.path), digest);
 });
 
 test('launcher preserves caller cwd and arguments for an explicit binary', async () => {

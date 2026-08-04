@@ -24,6 +24,26 @@ plan、store scope、配置 identity 与 preview binding 一致时才允许远�
 - **WHEN** execute 的 plan、store selection 或 stores config identity 与 binding 不一致
 - **THEN** 系统在任何 mutation 前 fail closed，并要求重新 preview 与授权
 
+#### Scenario: 绕过 apply 直接执行阶段命令
+- **WHEN** 用户对 `upload`、`alt` 或 `video-copy` 传入 `--execute`
+- **THEN** 系统在任何网络写入前拒绝，并指引使用 plan-bound `apply --execute`
+
+### Requirement: 远端身份与本地输入必须冻结
+系统 SHALL 只接受合法的 Shopify store handle，在请求前冻结并验证 stores config 与资源
+bytes/SHA；dotenv 不得导出 Shopify 白名单以外的进程变量。
+
+#### Scenario: Store handle 试图改变请求 origin
+- **WHEN** `shopifyStore` 包含 URL、path、dot、port 或其它非 handle 字符
+- **THEN** 系统在读取或发送凭据前拒绝，且携带 Shopify 凭据的请求不得跟随跨 origin redirect
+
+#### Scenario: Preview 后资源被替换
+- **WHEN** 上传时的资源 snapshot SHA 与 plan resource SHA 不一致
+- **THEN** 系统在 staged upload HTTP 前拒绝，且不得采用变化后的 bytes
+
+#### Scenario: Dotenv 包含传输层变量
+- **WHEN** dotenv 除 Shopify auth/API version 外还包含 proxy、TLS 或其它进程变量
+- **THEN** 系统忽略非白名单变量且保留已有进程环境
+
 ### Requirement: 确定性执行器拥有阶段状态
 系统 SHALL 由同一 executor run 管理 upload、alt、translation、verify 的阶段顺序、
 bounded concurrency、错误聚合、安全停止和 terminal summary。
