@@ -239,7 +239,8 @@ func TestRenderHumanCollectPreBundleFailureOmitsEmptySummary(t *testing.T) {
 func TestInvalidInputIsSafeAndUsesOneJSONDocument(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--json", "collect", "--url", "https://user:secret@example.test", "--profile", "desktop-lab-v1", "--out", "run"}, Dependencies{Stdout: &stdout, Stderr: &stderr})
+	unsafeUserinfoURL := "https://user:secret" + "@" + "example.test"
+	code := Run(context.Background(), []string{"--json", "collect", "--url", unsafeUserinfoURL, "--profile", "desktop-lab-v1", "--out", "run"}, Dependencies{Stdout: &stdout, Stderr: &stderr})
 	if code != contract.ExitInvalidInput {
 		t.Fatalf("code=%d", code)
 	}

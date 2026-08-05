@@ -7,6 +7,7 @@
   "ignoredDirectories": [
     ".git",
     ".codex",
+    ".superpowers",
     "node_modules",
     ".runtime",
     ".cache",

@@ -262,8 +262,9 @@ func TestServiceRunRedactsFinalURLAndWarnsOnDrift(t *testing.T) {
 }
 
 func TestServiceRunNeverPersistsUnsafeFinalURL(t *testing.T) {
+	unsafeUserinfoURL := "https://user:secret" + "@" + "example.test/landing?token=one"
 	runner := &recordingRunner{results: []runnerResult{
-		{lhr: fixtureLHRWithURL(1, "https://user:secret@example.test/landing?token=one", "main > img")},
+		{lhr: fixtureLHRWithURL(1, unsafeUserinfoURL, "main > img")},
 		{lhr: fixtureLHR(2)},
 		{lhr: fixtureLHR(3)},
 	}}

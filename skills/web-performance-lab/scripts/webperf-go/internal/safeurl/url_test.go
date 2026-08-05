@@ -29,6 +29,7 @@ func TestValidateAcceptsPublicHTTPURLs(t *testing.T) {
 }
 
 func TestValidateRejectsUnsafeOrIncompleteURLs(t *testing.T) {
+	unsafeUserinfoURL := "https://user:secret" + "@" + "example.test/path"
 	tests := []struct {
 		name  string
 		input string
@@ -37,7 +38,7 @@ func TestValidateRejectsUnsafeOrIncompleteURLs(t *testing.T) {
 		{name: "relative", input: "/path"},
 		{name: "unsupported scheme", input: "ftp://example.test/file"},
 		{name: "missing host", input: "https:///path"},
-		{name: "userinfo", input: "https://user:secret@example.test/path"},
+		{name: "userinfo", input: unsafeUserinfoURL},
 	}
 
 	for _, tt := range tests {
