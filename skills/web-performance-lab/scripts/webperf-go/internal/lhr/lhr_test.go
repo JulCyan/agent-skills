@@ -80,6 +80,27 @@ func TestParseUsesSafeFinalURLWhenDisplayedURLIsInvalid(t *testing.T) {
 	}
 }
 
+func TestParseIgnoresUnrelatedInsightObjectItems(t *testing.T) {
+	payload := []byte(`{
+        "lighthouseVersion":"13.4.1",
+        "finalDisplayedUrl":"https://example.test/page",
+        "categories":{"performance":{"score":0.5}},
+        "audits":{
+          "first-contentful-paint":{"numericValue":1},
+          "largest-contentful-paint":{"numericValue":2},
+          "speed-index":{"numericValue":3},
+          "total-blocking-time":{"numericValue":4},
+          "cumulative-layout-shift":{"numericValue":0.01},
+          "document-latency-insight":{"details":{"items":{"usesCompression":{"value":true}}}}
+        },
+        "environment":{"benchmarkIndex":5}
+    }`)
+
+	if _, err := Parse(payload); err != nil {
+		t.Fatalf("unrelated insight shape rejected the report: %v", err)
+	}
+}
+
 func TestParseRejectsInvalidReports(t *testing.T) {
 	valid := `{
         "lighthouseVersion":"13.4.1", "finalDisplayedUrl":"https://example.test/page",

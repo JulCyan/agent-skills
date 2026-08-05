@@ -109,15 +109,21 @@ type report struct {
 type audit struct {
 	NumericValue *float64 `json:"numericValue"`
 	Details      struct {
-		Items []struct {
-			Type     string `json:"type"`
-			Selector string `json:"selector"`
-		} `json:"items"`
+		Items json.RawMessage `json:"items"`
 	} `json:"details"`
 }
 
+type insightItem struct {
+	Type     string `json:"type"`
+	Selector string `json:"selector"`
+}
+
 func (a audit) selector() string {
-	for _, item := range a.Details.Items {
+	var items []insightItem
+	if len(a.Details.Items) == 0 || json.Unmarshal(a.Details.Items, &items) != nil {
+		return ""
+	}
+	for _, item := range items {
 		if item.Type == "node" && item.Selector != "" {
 			return item.Selector
 		}
