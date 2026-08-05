@@ -31,7 +31,10 @@
 
 不要把 `doctor=NEEDS_SETUP` 直接映射为 `engine setup`。先用当前环境的只读能力确认 Node.js 22.19+、npm、Chrome/Chromium；缺项应单独报告，并在获得对应授权后修复，再重跑 `doctor`。只有 host prerequisites 已就绪且状态仍为 `NEEDS_SETUP` 时，才披露用户缓存写入与联网 `npm ci` 的副作用、取得明确授权、运行 `engine setup`，然后重跑 `doctor`。
 
-如果 setup 或后续诊断报告 existing engine target invalid，停止并报告。CLI 不授权删除、覆盖或自动修复该缓存；需要由用户另行决定处置。
+如果 setup 返回 path-free `error.code=engine_target_invalid`，停止并报告。CLI 不授权
+删除、覆盖、自动重试或修复该缓存；需要由用户另行决定处置。
+Integrity schema 升级使用新的内部 cache generation；旧 generation 保持只读原状，
+不会被自动迁移、覆盖或删除。
 
 ## JSON envelope
 
@@ -56,24 +59,28 @@ Managed commands 输出：
 
 ## Status 与 exit code
 
-| Status | 含义 | Exit |
-| --- | --- | ---: |
-| `OK` | 命令或分析成功；compare 的 verdict 仍在 `data.overall` | 0 |
-| `INVALID_INPUT` | 命令、flag、profile、URL 或目录参数无效 | 2 |
-| `NEEDS_SETUP` | locked engine、Node、Chrome 或安装条件未就绪 | 3；launcher 缺 Go 为 2 |
-| `INTERRUPTED` | 收到取消或超时 | 130 |
-| `PARTIAL` | 至少一个 collect attempt 未完整成功；不可比较 | 1 |
-| `INCONCLUSIVE` | aggregate 缺失、bundle 不完整或证据无效 | 1 |
-| `INCOMPATIBLE_PROTOCOL` | profile/runtime fingerprint 不一致 | 1 |
-| `ENGINE_FAILED` | Lighthouse/browser attempt 失败 | 1 |
-| `NAVIGATION_FAILED` | 导航失败状态（保留合同） | 1 |
-| `PARSE_FAILED` | LHR 无法按锁定 schema 解析 | 1 |
+| Status | Scope | 含义 | Exit |
+| --- | --- | --- | ---: |
+| `OK` | envelope / attempt | 命令、分析或 attempt 成功；compare verdict 仍在 `data.overall` | 0 |
+| `INVALID_INPUT` | envelope | 命令、flag、profile、URL 或目录参数无效 | 2 |
+| `NEEDS_SETUP` | envelope | locked engine、Node、Chrome 或安装条件未就绪 | 3；launcher 缺 Go 为 2 |
+| `INTERRUPTED` | envelope / attempt | 收到取消或超时 | 130（attempt 无独立 exit） |
+| `PARTIAL` | envelope / summary | 至少一个 collect attempt 未完整成功；不可比较 | 1 |
+| `INCONCLUSIVE` | envelope | aggregate 缺失、bundle 不完整或证据无效 | 1 |
+| `INCOMPATIBLE_PROTOCOL` | envelope | profile/runtime fingerprint 不一致 | 1 |
+| `ENGINE_FAILED` | envelope / attempt | fatal collection failure，或单次 Lighthouse/browser attempt 失败 | 1（attempt 无独立 exit） |
+| `PARSE_FAILED` | attempt only | 单次 LHR 无法按锁定 schema 解析；collect envelope 汇总为 `PARTIAL` | n/a |
+| `NAVIGATION_FAILED` | reserved | schema v1 保留值，当前 executor 不产生该状态 | n/a |
 
 ## Evidence 与恢复
 
 `collect` 的 `--out` 必须是新目录。bundle 以 `manifest.json` 为最终 commit point，包含 `protocol.json`、可验证的 `summary.json` 及 `samples/run-N.lhr.json`。每个 artifact 有 SHA-256；`inspect` 会重新读取并核对原始报告，不信任手工修改的 summary。
 
 中断或失败后保留 evidence 供诊断，但不要续写、覆盖或手工修复旧 bundle。使用新目录重新 `collect`。URL query value 在安全摘要中会被替换为 `REDACTED`，原始 LHR 仍应视为敏感运行证据且不进入 Git。
+
+Unix 平台会终止 executor-owned Lighthouse/Chrome process group。其他平台的 Go
+executor 只保证终止直接 Lighthouse process，browser descendants 或临时浏览器状态
+可能残留；报告该边界并在重新采集前检查本机状态，不得声称 process tree 已完整清理。
 
 ## 合成示例
 

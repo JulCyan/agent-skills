@@ -20,6 +20,12 @@
 - **THEN** 系统只安装 manifest 声明的精确版本，并将安装结果写入版本化用户
   cache
 
+#### Scenario: 既有 cache 不可信或 payload 被篡改
+- **WHEN** cache hierarchy 含 symlink 或不安全类型、Unix cache 权限或 euid owner
+  不安全，或 payload tree 与安装时 integrity marker 不一致
+- **THEN** 系统不得执行或覆盖该 cache；诊断返回 `NEEDS_SETUP`，显式 setup 返回
+  path-free `engine_target_invalid` 并要求停止处置
+
 ### Requirement: 性能结论必须来自重复串行采样
 系统 SHALL 默认串行执行五次 Lighthouse 采集，且只有至少三次成功样本时才生成
 aggregate 结论；系统不得并发采集、静默重试或以单次结果作为验收结论。
@@ -55,8 +61,9 @@ aggregate 结论；系统不得并发采集、静默重试或以单次结果作�
 
 #### Scenario: 中途收到终止信号
 - **WHEN** collection 收到 interrupt 或 terminate signal
-- **THEN** 系统终止自己创建的进程组、保留可诊断 evidence，并将状态标记为
-  `INTERRUPTED`
+- **THEN** Unix 平台系统终止自己创建的进程组；其他平台至少终止直接子进程且不
+  对未解析 PID 发信号。系统保留可诊断 evidence，并将状态标记为 `INTERRUPTED`；
+  非 Unix 平台不得声称 descendant cleanup 已完成
 
 ### Requirement: 汇总不得伪造 Lighthouse 分数
 系统 SHALL 保留每次官方 performance score，并只汇总这些 score 的分布；系统不得

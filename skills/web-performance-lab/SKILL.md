@@ -60,6 +60,10 @@ description: Use when repeatable Lighthouse measurements are needed for a public
 
 收到 `INCOMPATIBLE_PROTOCOL`、`PARTIAL` 或 `INCONCLUSIVE` 时停止比较并重新采集，不手工绕过。结论应区分实测结果、波动和无法声明的 field experience。
 
+Unix 平台保证终止 executor-owned process group；其他平台的直接 Go executor 只终止
+direct Lighthouse process，browser descendants 或临时状态可能残留。中断后应报告该
+边界并检查本机状态，不能声称 process tree 已完整清理。
+
 需要精确参数、JSON status 或 exit code 时读 [cli-contract.md](references/cli-contract.md)；选择 profile、解释 median/MAD/IQR 或判断 materiality 时读 [measurement-protocol.md](references/measurement-protocol.md)。
 
 `raw lighthouse -- ...` 只供专家诊断：它没有 profile、聚合、证据脱敏或比较保证，不作为正式验收结果。

@@ -24,6 +24,20 @@ locked engine, invokes its official CLI through Node, and records the resolved
 Node, Lighthouse, and Chrome versions. It never invokes an unversioned `npx`,
 downloads `latest`, or updates the engine during collection.
 
+On Unix, the cache hierarchy rejects symlinks, unsafe entry types,
+group/other-writable paths, and entries not owned by the current effective user.
+Setup disables npm bin links and records a deterministic SHA-256 over every
+payload path, entry type, permission mode, and file byte. Runtime verifies the
+marker and takes descriptor-bound tree snapshots before and after resolving host
+tools. Any identity or digest drift fails closed without executing or replacing
+the cache. Non-Unix platforms still enforce type, no-symlink, descriptor
+identity, and the full digest, but do not claim portable ACL ownership or mode
+verification. Continuously malicious same-user processes after Runtime returns
+remain outside this local cache threat boundary.
+
+An integrity-schema change selects a new internal cache generation. A legacy
+generation remains untouched and cannot block setup of the new generation.
+
 The data flow is:
 
 `Skill -> webperf -> profile -> Lighthouse -> Chrome -> LHR -> summary`
@@ -77,9 +91,12 @@ the user may start a new bundle instead of biasing the sample by selective
 retry. At least three successful samples are required for aggregate metrics.
 The default and recommended count is five.
 
-Signals terminate the owned Lighthouse/Chrome process group, finalize the
-manifest as interrupted when possible, and remove only executor-owned temporary
-browser data. The caller-selected bundle remains available for diagnosis.
+On Unix, signals terminate the owned Lighthouse/Chrome process group with a
+bounded TERM-to-KILL sequence. Other platform builds terminate only the direct
+Lighthouse process; descendant cleanup is not guaranteed. The executor
+finalizes the manifest as interrupted when possible and removes only temporary
+browser data it can prove it owns. The caller-selected bundle remains available
+for diagnosis.
 
 ## Evidence and statistics
 
@@ -135,8 +152,10 @@ stable code, safe message, and remediation hint without credentials or raw
 query values.
 
 Fewer than three successful samples leaves evidence but returns an incomplete
-analysis. An atomic temporary bundle is renamed to its final path only after
-initialization succeeds; existing output paths are never overwritten.
+analysis. The bundle root is claimed with a sibling claim token and no-replace
+directory creation; a pending manifest records initialization and
+`manifest.json` is the final commit point. Existing output paths are never
+overwritten.
 
 ## Distribution
 

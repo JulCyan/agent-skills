@@ -143,6 +143,20 @@ func engineCommand(ctx context.Context, args []string, manager engineManager) (c
 	if ctx.Err() != nil {
 		return interrupted("engine setup"), false
 	}
+	if errors.Is(err, engine.ErrInvalidTarget) {
+		return contract.Envelope{
+			SchemaVersion: contract.SchemaVersion,
+			Command:       "engine setup",
+			Status:        contract.NeedsSetup,
+			Data:          engineStatusData{Status: status},
+			Error: contract.NewCommandError(
+				"engine_target_invalid",
+				"existing locked Lighthouse engine target is invalid",
+				"stop and inspect the existing engine cache; do not delete, replace, or rerun setup automatically",
+				err,
+			),
+		}, false
+	}
 	if err != nil || status != engine.Ready {
 		return needsSetupWithData("engine setup", engineStatusData{Status: status}), false
 	}

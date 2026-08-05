@@ -141,6 +141,68 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 	}
 }
 
+func TestRealEngineSetupSmoke(t *testing.T) {
+	cacheRoot := os.Getenv("WEBPERF_ENGINE_SMOKE_ROOT")
+	if cacheRoot == "" {
+		t.Skip("set WEBPERF_ENGINE_SMOKE_ROOT to run the networked locked-engine smoke test")
+	}
+	if !filepath.IsAbs(cacheRoot) {
+		t.Fatal("WEBPERF_ENGINE_SMOKE_ROOT must be an absolute path")
+	}
+
+	manager := Manager{cacheRoot: cacheRoot}
+	status, err := manager.Setup(context.Background())
+	if err != nil || status != Ready {
+		t.Fatalf("setup status=%s err=%v", status, err)
+	}
+	runtimeInfo, err := manager.Runtime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeInfo.Version() != LighthouseVersion || runtimeInfo.NodeVersion() == "" || runtimeInfo.ChromeVersion() == "" {
+		t.Fatalf("runtime=%+v", runtimeInfo)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	result := NewRunner(runtimeInfo).RunRaw(context.Background(), []string{"--version"}, &stdout, &stderr)
+	if result.Err != nil || result.ExitCode != 0 {
+		t.Fatalf("raw version result=%+v stderr=%q", result, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != LighthouseVersion {
+		t.Fatalf("raw version=%q", stdout.String())
+	}
+}
+
+func TestSetupUsesNewCacheGenerationWithoutModifyingLegacyTarget(t *testing.T) {
+	commands := &recordingCommandRunner{}
+	manager := testManager(t, commands)
+	commands.run = func(_ context.Context, _ string, _ []string, dir string, _ []string, _ io.Writer, _ io.Writer) error {
+		installUnmanagedFixture(t, dir, lighthouseVersion)
+		return nil
+	}
+	legacyTarget := filepath.Join(manager.cacheRoot, "webperf", "engines", "lighthouse", lighthouseVersion)
+	if err := os.MkdirAll(legacyTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacySentinel := filepath.Join(legacyTarget, "legacy-sentinel")
+	legacyContents := []byte("legacy cache remains untouched\n")
+	if err := os.WriteFile(legacySentinel, legacyContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := manager.Setup(context.Background())
+	if err != nil || status != Ready {
+		t.Fatalf("setup status=%s err=%v", status, err)
+	}
+	if manager.targetDir(t) == legacyTarget {
+		t.Fatal("integrity-bound engine reused the legacy cache target")
+	}
+	got, err := os.ReadFile(legacySentinel)
+	if err != nil || !bytes.Equal(got, legacyContents) {
+		t.Fatalf("legacy cache changed: contents=%q err=%v", got, err)
+	}
+}
+
 func TestSetupRejectsUnsafeCacheRootWithoutRunningNPM(t *testing.T) {
 	if !isUnix(runtime.GOOS) {
 		t.Skip("Unix permission bits are required")

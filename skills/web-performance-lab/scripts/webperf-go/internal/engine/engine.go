@@ -27,6 +27,7 @@ const (
 	lighthouseVersion = LighthouseVersion
 	requiredNodeMajor = 22
 	requiredNodeMinor = 19
+	cacheGeneration   = "v2"
 	lighthouseCLIPath = "node_modules/lighthouse/cli/index.js"
 	installMarkerPath = ".webperf-engine.json"
 	installPayloadDir = "payload"
@@ -240,7 +241,7 @@ func (m Manager) managerOwnedDirs() ([]string, error) {
 		webperfRoot,
 		enginesRoot,
 		lighthouseRoot,
-		filepath.Join(lighthouseRoot, lighthouseVersion),
+		filepath.Join(lighthouseRoot, lighthouseVersion+"-"+cacheGeneration),
 	}, nil
 }
 

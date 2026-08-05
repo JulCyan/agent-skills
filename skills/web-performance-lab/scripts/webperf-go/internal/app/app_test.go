@@ -93,6 +93,29 @@ func TestEngineBackedCommandsReturnStructuredNeedsSetup(t *testing.T) {
 	}
 }
 
+func TestEngineSetupReportsInvalidExistingTargetWithoutRetry(t *testing.T) {
+	code, report := runJSONWith(t, Dependencies{Engine: invalidTargetEngine{}}, "--json", "engine", "setup")
+	if code != contract.ExitNeedsSetup || report.Status != contract.NeedsSetup {
+		t.Fatalf("code=%d status=%s", code, report.Status)
+	}
+	if report.Error == nil || report.Error.Code != "engine_target_invalid" {
+		t.Fatalf("error=%+v", report.Error)
+	}
+	if report.Error.Message != "existing locked Lighthouse engine target is invalid" {
+		t.Fatalf("message=%q", report.Error.Message)
+	}
+	if report.Error.Remediation != "stop and inspect the existing engine cache; do not delete, replace, or rerun setup automatically" {
+		t.Fatalf("remediation=%q", report.Error.Remediation)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "/private/cache") {
+		t.Fatalf("report exposed engine path: %s", encoded)
+	}
+}
+
 func TestDoctorReportsHostEnvironmentWithoutExecutablePaths(t *testing.T) {
 	code, report := runJSONWith(t, Dependencies{Engine: needsSetupEngine{}}, "--json", "doctor")
 	if code != contract.ExitNeedsSetup || report.Status != contract.NeedsSetup {
@@ -575,6 +598,18 @@ func (needsSetupEngine) Setup(context.Context) (engine.Status, error) {
 }
 
 func (needsSetupEngine) Runtime(context.Context) (engine.Runtime, error) {
+	return engine.Runtime{}, engine.ErrNeedsSetup
+}
+
+type invalidTargetEngine struct{}
+
+func (invalidTargetEngine) Status(context.Context) engine.Status { return engine.NeedsSetup }
+
+func (invalidTargetEngine) Setup(context.Context) (engine.Status, error) {
+	return engine.NeedsSetup, fmt.Errorf("/private/cache: %w", engine.ErrInvalidTarget)
+}
+
+func (invalidTargetEngine) Runtime(context.Context) (engine.Runtime, error) {
 	return engine.Runtime{}, engine.ErrNeedsSetup
 }
 
