@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/bundle"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/collect"
+	webcompare "github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/compare"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/contract"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/engine"
+	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/lhr"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/stats"
 )
 
@@ -63,7 +69,7 @@ func TestProfilesListPrintsAvailableProfilesForHumans(t *testing.T) {
 	}
 }
 
-func TestFutureCommandsReturnStructuredNeedsSetup(t *testing.T) {
+func TestEngineBackedCommandsReturnStructuredNeedsSetup(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -72,9 +78,6 @@ func TestFutureCommandsReturnStructuredNeedsSetup(t *testing.T) {
 		{name: "engine status", args: []string{"--json", "engine", "status"}},
 		{name: "engine setup", args: []string{"--json", "engine", "setup"}},
 		{name: "collect", args: []string{"--json", "collect", "--url", "https://example.test", "--profile", "desktop-lab-v1", "--out", "run"}},
-		{name: "inspect", args: []string{"--json", "inspect", "--run", "run"}},
-		{name: "compare", args: []string{"--json", "compare", "--baseline", "base", "--candidate", "candidate"}},
-		{name: "raw", args: []string{"--json", "raw", "lighthouse", "--", "--help"}},
 	}
 
 	for _, tt := range tests {
@@ -259,6 +262,155 @@ func TestUnknownCommandReturnsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestInspectReportsFinalizedAggregateWithoutRawLHR(t *testing.T) {
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	code, report := runJSON(t, "--json", "inspect", "--run", directory)
+	if code != contract.ExitOK || report.Status != contract.OK {
+		t.Fatalf("code=%d report=%+v", code, report)
+	}
+	encoded, err := json.Marshal(report.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"aggregateAvailable", "protocol", "metrics"} {
+		if !strings.Contains(string(encoded), required) {
+			t.Fatalf("inspect data missing %q: %s", required, encoded)
+		}
+	}
+	for _, forbidden := range []string{"lcp-breakdown-insight", directory} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("inspect data leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestInspectFailsClosedWhenAggregateIsUnavailable(t *testing.T) {
+	directory := pendingBundle(t)
+	code, report := runJSON(t, "--json", "inspect", "--run", directory)
+	if code == contract.ExitOK || report.Status != contract.Inconclusive {
+		t.Fatalf("code=%d report=%+v", code, report)
+	}
+	encoded, err := json.Marshal(report.Data)
+	if err != nil || strings.Contains(string(encoded), "samples") || strings.Contains(string(encoded), "artifact") {
+		t.Fatalf("data=%s err=%v", encoded, err)
+	}
+}
+
+func TestInspectFailsClosedWithoutEchoingHashValidSecrets(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "run")
+	protocol := appProtocol()
+	secretURL := "https://example.test/?token=manifest-secret"
+	store, err := bundle.Create(directory, bundle.Manifest{SchemaVersion: 1, Status: "RUNNING", RequestedURL: secretURL}, protocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples := []bundle.SuccessfulSample{
+		{Attempt: 1, Sample: appSample(1500, 0.1, 70)},
+		{Attempt: 2, Sample: appSample(1500, 0.1, 70)},
+		{Attempt: 3, Sample: appSample(1500, 0.1, 70)},
+	}
+	summary := bundle.Summary{SchemaVersion: 1, Status: "OK", Profile: "desktop-lab-v1", RequestedURL: secretURL, RequestedRuns: 3, Samples: samples, Metrics: appMetrics(samples), Warnings: []string{"secret-warning /private/secret"}}
+	attempts := make([]bundle.Attempt, len(samples))
+	artifacts := make([]bundle.Artifact, len(samples))
+	for index := range samples {
+		path := fmt.Sprintf("samples/run-%d.lhr.json", index+1)
+		digest, err := store.WriteArtifact(path, []byte(appLHR(1500, 0.1, 70)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempts[index] = bundle.Attempt{Number: index + 1, Status: "OK", Artifact: path}
+		artifacts[index] = bundle.Artifact{Kind: "lhr", Path: path, SHA256: digest}
+	}
+	if err := store.Finalize(bundle.Manifest{SchemaVersion: 1, Status: "OK", RequestedURL: secretURL, Attempts: attempts, Artifacts: artifacts}, &summary); err != nil {
+		t.Fatal(err)
+	}
+	code, report := runJSON(t, "--json", "inspect", "--run", directory)
+	if code == contract.ExitOK || report.Status != contract.Inconclusive {
+		t.Fatalf("code=%d report=%+v", code, report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"manifest-secret", "secret-warning", "/private/secret"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("inspect exposed %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestCompareReportsMixedAnalysisAsSuccessfulResult(t *testing.T) {
+	baseline := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	candidate := finalizedBundle(t, "OK", 1200, 0.2, 80)
+	code, report := runJSON(t, "--json", "compare", "--baseline", baseline, "--candidate", candidate)
+	if code != contract.ExitOK || report.Status != contract.OK {
+		t.Fatalf("code=%d report=%+v", code, report)
+	}
+	encoded, err := json.Marshal(report.Data)
+	if err != nil || !strings.Contains(string(encoded), string(webcompare.Mixed)) {
+		t.Fatalf("data=%s err=%v", encoded, err)
+	}
+}
+
+func TestCompareMakesPartialBundleInconclusive(t *testing.T) {
+	baseline := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	candidate := finalizedBundle(t, "PARTIAL", 1200, 0.1, 80)
+	code, report := runJSON(t, "--json", "compare", "--baseline", baseline, "--candidate", candidate)
+	if code == contract.ExitOK || report.Status != contract.Inconclusive || report.Error == nil || report.Error.Code != "incomplete_bundle" {
+		t.Fatalf("code=%d report=%+v", code, report)
+	}
+}
+
+func TestRawRequiresSeparatorAndRejectsGlobalJSON(t *testing.T) {
+	code, report := runJSON(t, "--json", "raw", "lighthouse", "--", "--help")
+	if code != contract.ExitInvalidInput || report.Status != contract.InvalidInput || report.Error == nil || report.Error.Code != "raw_json_unsupported" {
+		t.Fatalf("code=%d report=%+v", code, report)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code = Run(context.Background(), []string{"raw", "lighthouse", "--help"}, Dependencies{Stdout: &stdout, Stderr: &stderr})
+	if code != contract.ExitInvalidInput || !strings.Contains(stderr.String(), "expected raw lighthouse --") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRawForwardsOnlySeparatedArgumentsThroughInjectedLockedRunner(t *testing.T) {
+	runner := &recordingRawRunner{result: engine.Result{ExitCode: 23, Err: errors.New("official command failed")}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"raw", "lighthouse", "--", "--output=json", "https://example.test"}, Dependencies{
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		Engine:    readyStatusEngine{},
+		RawRunner: runner,
+	})
+	if code != 23 || !equalStrings(runner.args, []string{"--output=json", "https://example.test"}) {
+		t.Fatalf("code=%d args=%v", code, runner.args)
+	}
+	if !strings.Contains(stdout.String(), "official stdout") || !strings.Contains(stderr.String(), "official stderr") || !strings.Contains(stderr.String(), "does not use profiles") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRawReportsFixedChromeOverrideDiagnostic(t *testing.T) {
+	runner := &recordingRawRunner{result: engine.Result{ExitCode: contract.ExitInvalidInput, Err: engine.ErrRawChromePath}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"raw", "lighthouse", "--", "--chrome-path=/private/secret-chrome"}, Dependencies{
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		Engine:    readyStatusEngine{},
+		RawRunner: runner,
+	})
+	if code != contract.ExitInvalidInput || !strings.Contains(stderr.String(), "cannot override the resolved Chrome runtime") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "secret-chrome") {
+		t.Fatalf("raw diagnostic leaked caller path: %q", stderr.String())
+	}
+}
+
 func runJSON(t *testing.T, args ...string) (int, contract.Envelope) {
 	return runJSONWith(t, Dependencies{}, args...)
 }
@@ -275,6 +427,142 @@ func runJSONWith(t *testing.T, deps Dependencies, args ...string) (int, contract
 		t.Fatalf("stdout was not JSON: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 	}
 	return code, report
+}
+
+func finalizedBundle(t *testing.T, status string, lcp, cls, score float64) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "run")
+	requestedURL := "https://example.test/"
+	store, err := bundle.Create(directory, bundle.Manifest{SchemaVersion: 1, Status: "RUNNING", RequestedURL: requestedURL}, appProtocol())
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples := []bundle.SuccessfulSample{
+		{Attempt: 1, Sample: appSample(lcp, cls, score)},
+		{Attempt: 2, Sample: appSample(lcp, cls, score)},
+		{Attempt: 3, Sample: appSample(lcp, cls, score)},
+		{Attempt: 4, Sample: appSample(lcp, cls, score)},
+		{Attempt: 5, Sample: appSample(lcp, cls, score)},
+	}
+	summary := bundle.Summary{
+		SchemaVersion:  1,
+		Status:         status,
+		Profile:        "desktop-lab-v1",
+		RequestedURL:   requestedURL,
+		FinalURL:       "https://example.test/landing",
+		RequestedRuns:  5,
+		SuccessfulRuns: 5,
+		Samples:        samples,
+		Metrics:        appMetrics(samples),
+	}
+	if status == string(contract.Partial) {
+		summary.Warnings = []string{"temporary browser cleanup failed"}
+	}
+	attempts := make([]bundle.Attempt, len(samples))
+	artifacts := make([]bundle.Artifact, len(samples))
+	for index := range samples {
+		path := fmt.Sprintf("samples/run-%d.lhr.json", index+1)
+		digest, err := store.WriteArtifact(path, []byte(appLHR(lcp, cls, score)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempts[index] = bundle.Attempt{Number: index + 1, Status: "OK", Artifact: path}
+		if status == string(contract.Partial) && index == 0 {
+			attempts[index].Status = string(contract.Partial)
+			attempts[index].Error = "temporary browser cleanup failed"
+			attempts[index].CleanupFailed = true
+		}
+		artifacts[index] = bundle.Artifact{Kind: "lhr", Path: path, SHA256: digest}
+	}
+	if err := store.Finalize(bundle.Manifest{SchemaVersion: 1, Status: status, RequestedURL: requestedURL, FinalURL: summary.FinalURL, Attempts: attempts, Artifacts: artifacts}, &summary); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func pendingBundle(t *testing.T) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "run")
+	if _, err := bundle.Create(directory, bundle.Manifest{SchemaVersion: 1, Status: "RUNNING", RequestedURL: "https://example.test/"}, appProtocol()); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func appProtocol() bundle.Protocol {
+	return bundle.CompleteProtocol(bundle.Protocol{
+		SchemaVersion:     1,
+		Profile:           "desktop-lab-v1",
+		FormFactor:        "desktop",
+		ThrottlingMethod:  "simulate",
+		ResolvedFlags:     []string{"--preset=desktop", "--throttling-method=simulate"},
+		RuntimeFlags:      bundle.ExpectedRuntimeFlags(),
+		LighthouseVersion: "13.4.1",
+		NodeVersion:       "24.16.0",
+		ChromeVersion:     "150.0.0.0",
+		OS:                "darwin",
+		Arch:              "arm64",
+	})
+}
+
+func appSample(value, cls, score float64) lhr.Sample {
+	return lhr.Sample{LighthouseVersion: "13.4.1", FinalURL: "https://example.test/landing", PerformanceScore: score, FCP: value, LCP: value, SpeedIndex: value, TBT: value, CLS: cls, BenchmarkIndex: 1, LCPSelector: "main > img"}
+}
+
+func appLHR(value, cls, score float64) string {
+	return fmt.Sprintf(`{
+  "lighthouseVersion": "13.4.1",
+  "finalDisplayedUrl": "https://example.test/landing",
+  "categories": {"performance": {"score": %g}},
+  "environment": {"benchmarkIndex": 1},
+  "audits": {
+    "first-contentful-paint": {"numericValue": %g},
+    "largest-contentful-paint": {"numericValue": %g},
+    "speed-index": {"numericValue": %g},
+    "total-blocking-time": {"numericValue": %g},
+    "cumulative-layout-shift": {"numericValue": %g},
+    "lcp-breakdown-insight": {"details": {"items": [{"type": "node", "selector": "main > img"}]}}
+  }
+}`,
+		score/100,
+		value,
+		value,
+		value,
+		value,
+		cls,
+	)
+}
+
+func appMetrics(samples []bundle.SuccessfulSample) bundle.Metrics {
+	values := make([]float64, len(samples))
+	scores := make([]float64, len(samples))
+	classes := make([]float64, len(samples))
+	for index, item := range samples {
+		values[index] = item.Sample.LCP
+		scores[index] = item.Sample.PerformanceScore
+		classes[index] = item.Sample.CLS
+	}
+	return bundle.Metrics{
+		PerformanceScore: stats.Summarize(scores),
+		FCP:              stats.Summarize(values),
+		LCP:              stats.Summarize(values),
+		SpeedIndex:       stats.Summarize(values),
+		TBT:              stats.Summarize(values),
+		CLS:              stats.Summarize(classes),
+		BenchmarkIndex:   stats.Summarize([]float64{1, 1, 1, 1, 1}),
+	}
+}
+
+type recordingRawRunner struct {
+	args   []string
+	result engine.Result
+}
+
+func (r *recordingRawRunner) Run(_ context.Context, _ engine.Runtime, args []string, stdout, stderr io.Writer) engine.Result {
+	r.args = append([]string(nil), args...)
+	_, _ = io.WriteString(stdout, "official stdout\n")
+	_, _ = io.WriteString(stderr, "official stderr\n")
+	return r.result
 }
 
 type needsSetupEngine struct{}

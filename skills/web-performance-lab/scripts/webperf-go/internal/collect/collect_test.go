@@ -47,6 +47,9 @@ func TestServiceRunIsSequentialAndDoesNotRetry(t *testing.T) {
 	if len(store.Manifest().Attempts) != 5 {
 		t.Fatalf("attempts=%d", len(store.Manifest().Attempts))
 	}
+	if _, err := store.ValidateEvidence(); err != nil {
+		t.Fatalf("collected evidence did not validate: %v", err)
+	}
 }
 
 func TestServiceRunRejectsIncompleteProtocolBeforeCreatingBundle(t *testing.T) {
@@ -167,6 +170,27 @@ func TestServiceRunRequiresThreeSuccessfulSamplesAndKeepsEvidence(t *testing.T) 
 	}
 	if _, statErr := os.Stat(filepath.Join(request.Out, "summary.json")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("incomplete run wrote aggregate summary: %v", statErr)
+	}
+}
+
+func TestIncompleteCollectionWithLHRWarningsKeepsVerifiableArtifacts(t *testing.T) {
+	runner := &recordingRunner{results: []runnerResult{
+		{lhr: addRunWarning(fixtureLHR(1))},
+		{err: errors.New("engine failed")},
+		{lhr: fixtureLHR(2)},
+	}}
+	request := validRequest(t, 3)
+
+	_, err := Service{Runner: runner}.Run(context.Background(), request)
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("err=%v", err)
+	}
+	store, err := bundle.Open(request.Out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ValidateEvidence(); err != nil {
+		t.Fatalf("incomplete evidence did not validate: %v", err)
 	}
 }
 
@@ -324,7 +348,7 @@ func TestFinalizeCorrectsSuccessfulRunsWhenInterruptedWithoutAggregate(t *testin
 			{Attempt: 2, Sample: lhr.Sample{FinalURL: "https://example.test"}},
 		},
 	}
-	got, err := (Service{}).finalize(ctx, store, bundle.Manifest{Status: "OK"}, summary, time.Now, &summary, nil)
+	got, err := (Service{}).finalize(ctx, store, bundle.Manifest{Status: "OK"}, summary, bundle.WarningSignals{}, time.Now, &summary, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
 	}
@@ -484,7 +508,7 @@ func validRequest(t *testing.T, runs int) Request {
 		Profile:    resolved,
 		Runs:       runs,
 		Out:        filepath.Join(t.TempDir(), "run"),
-		Protocol: bundle.Protocol{
+		Protocol: bundle.CompleteProtocol(bundle.Protocol{
 			SchemaVersion:     1,
 			Profile:           resolved.Name,
 			FormFactor:        resolved.FormFactor,
@@ -495,8 +519,8 @@ func validRequest(t *testing.T, runs int) Request {
 			OS:                "test",
 			Arch:              "test",
 			ResolvedFlags:     append([]string(nil), resolved.LighthouseArgs...),
-			RuntimeFlags:      []string{"--output=json", "fresh-user-data-dir-per-attempt"},
-		},
+			RuntimeFlags:      bundle.ExpectedRuntimeFlags(),
+		}),
 	}
 }
 

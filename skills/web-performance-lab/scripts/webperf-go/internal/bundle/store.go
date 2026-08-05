@@ -42,14 +42,26 @@ var (
 	linkTempJSON           = func(root *os.Root, oldName, newName string) error { return root.Link(oldName, newName) }
 	syncBundleDirectory    = syncRootDirectory
 	beforeJSONLink         = func(root *os.Root, destination string) {}
+	// afterSummaryHashVerified is a test seam. Summary has already bound and
+	// hashed its descriptor bytes before it runs, so a path replacement here
+	// cannot affect the returned aggregate.
+	afterSummaryHashVerified = func(root *os.Root) {}
+	// afterArtifactLstat is a test seam for the Lstat-to-open replacement
+	// window. readVerifiedArtifact must bind the same inode after this hook.
+	afterArtifactLstat = func(root *os.Root, artifact Artifact) {}
+	// afterArtifactParentCheck is a test seam for replacement of an artifact
+	// directory after its initial path validation.
+	afterArtifactParentCheck = func(root *os.Root, artifact Artifact) {}
 )
 
 // Store is an evidence bundle rooted at Path. Creation never replaces an
 // existing filesystem entry, including an existing symlink.
 type Store struct {
-	path     string
-	manifest Manifest
-	protocol Protocol
+	path      string
+	rootInfo  os.FileInfo
+	finalized bool
+	manifest  Manifest
+	protocol  Protocol
 }
 
 // Create atomically claims a new bundle directory. Existing targets fail closed
@@ -92,7 +104,7 @@ func Create(target string, manifest Manifest, protocol Protocol) (*Store, error)
 	}
 	_ = parentRoot.Remove(claimSidecar(base))
 	cleanup = false
-	return &Store{path: target, manifest: cloneManifest(manifest), protocol: protocol}, nil
+	return &Store{path: target, rootInfo: claim, manifest: cloneManifest(manifest), protocol: protocol}, nil
 }
 
 // Open loads a complete bundle and rejects symlinks, non-regular JSON files,
@@ -135,7 +147,7 @@ func Open(target string) (*Store, error) {
 			return nil, fmt.Errorf("verify absent evidence summary: %w", err)
 		}
 	}
-	return &Store{path: target, manifest: manifest, protocol: protocol}, nil
+	return &Store{path: target, rootInfo: info, finalized: finalManifest, manifest: manifest, protocol: protocol}, nil
 }
 
 // Path returns the root directory of this bundle.
@@ -144,25 +156,52 @@ func (s *Store) Path() string { return s.path }
 // Manifest returns a copy of the run-level metadata.
 func (s *Store) Manifest() Manifest { return cloneManifest(s.manifest) }
 
-// Protocol returns the resolved measurement protocol.
-func (s *Store) Protocol() Protocol { return s.protocol }
+// Protocol returns a copy of the resolved measurement protocol.
+func (s *Store) Protocol() Protocol { return cloneProtocol(s.protocol) }
+
+// Summary loads the immutable, hash-verified aggregate when it exists. Pending
+// and incomplete bundles return nil so callers cannot mistake their evidence for
+// a finalized aggregate.
+func (s *Store) Summary() (*Summary, error) {
+	if s.manifest.SummarySHA256 == "" {
+		return nil, nil
+	}
+	root, err := s.openRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	contents, err := readVerifiedSummary(root, s.manifest.SummarySHA256)
+	if err != nil {
+		return nil, fmt.Errorf("verify evidence summary: %w", err)
+	}
+	afterSummaryHashVerified(root)
+	var summary Summary
+	if err := decodeJSON(contents, &summary); err != nil {
+		return nil, fmt.Errorf("read evidence summary: %w", err)
+	}
+	return cloneSummary(summary), nil
+}
 
 // WriteArtifact creates one private, relative evidence artifact. It never
 // replaces a prior artifact, including a pre-existing path introduced by
 // another process.
-func (s *Store) WriteArtifact(relativePath string, data []byte) error {
+func (s *Store) WriteArtifact(relativePath string, data []byte) (string, error) {
 	if !relativeArtifactPath(relativePath) {
-		return fmt.Errorf("%w: %q", ErrInvalidArtifactPath, relativePath)
+		return "", fmt.Errorf("%w: %q", ErrInvalidArtifactPath, relativePath)
 	}
 	root, err := s.openRoot()
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer root.Close()
 	if err := makeArtifactParent(root, path.Dir(relativePath)); err != nil {
-		return err
+		return "", err
 	}
-	return writeBundleBytes(root, relativePath, data)
+	if err := writeBundleBytes(root, relativePath, data); err != nil {
+		return "", err
+	}
+	return hashBytes(data), nil
 }
 
 // Finalize records the final manifest and, for complete runs, writes one
@@ -217,6 +256,31 @@ func (s *Store) Finalize(manifest Manifest, summary *Summary) error {
 		return fmt.Errorf("remove pending evidence manifest: %w", err)
 	}
 	s.manifest = cloneManifest(manifest)
+	s.finalized = true
+	return nil
+}
+
+// validateCommitPoint keeps the pending and final manifest states disjoint.
+// A pending manifest is only the initial durable claim, while any collection
+// result must be represented by the immutable final manifest commit point.
+func (s *Store) validateCommitPoint() error {
+	if s.finalized {
+		if s.manifest.Status == "RUNNING" {
+			return invalidEvidence("final manifest running")
+		}
+		return nil
+	}
+	if s.manifest.Status != "RUNNING" || len(s.manifest.Attempts) != 0 || len(s.manifest.Artifacts) != 0 || s.manifest.FinalURL != "" || s.manifest.FinishedAt != "" || s.manifest.SummarySHA256 != "" {
+		return invalidEvidence("pending manifest")
+	}
+	root, err := s.openRoot()
+	if err != nil {
+		return invalidEvidence("store root")
+	}
+	defer root.Close()
+	if err := ensureNoSummary(root); err != nil {
+		return invalidEvidence("pending summary")
+	}
 	return nil
 }
 
@@ -227,6 +291,9 @@ func (s *Store) openRoot() (*os.Root, error) {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, errors.New("open evidence bundle: not a directory")
+	}
+	if s.rootInfo != nil && !os.SameFile(s.rootInfo, info) {
+		return nil, errors.New("open evidence bundle: root changed after binding")
 	}
 	return openBoundRoot(s.path, info)
 }
@@ -241,7 +308,7 @@ func validateArtifacts(artifacts []Artifact) error {
 }
 
 func relativeArtifactPath(value string) bool {
-	if value == "" || strings.Contains(value, "\\") || filepath.IsAbs(value) {
+	if value == "" || strings.Contains(value, "\\") || strings.Contains(value, ":") || strings.HasPrefix(value, "//") || filepath.IsAbs(value) {
 		return false
 	}
 	clean := path.Clean(value)
@@ -442,21 +509,137 @@ func verifySummaryHash(root *os.Root, want string) error {
 	if len(want) != sha256.Size*2 {
 		return errors.New("final evidence manifest has invalid summary hash")
 	}
+	_, err := readVerifiedSummary(root, want)
+	return err
+}
+
+func readVerifiedSummary(root *os.Root, want string) ([]byte, error) {
 	info, err := root.Lstat(summaryFile)
 	if err != nil {
-		return fmt.Errorf("stat evidence summary: %w", err)
+		return nil, fmt.Errorf("stat evidence summary: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return errors.New("evidence summary is not regular")
+		return nil, errors.New("evidence summary is not regular")
 	}
 	contents, err := readBoundBytes(root, summaryFile, info)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if hashBytes(contents) != want {
-		return errors.New("evidence summary hash does not match final manifest")
+		return nil, errors.New("evidence summary hash does not match final manifest")
+	}
+	return contents, nil
+}
+
+func readVerifiedArtifact(root *os.Root, artifact Artifact) ([]byte, error) {
+	if !relativeArtifactPath(artifact.Path) || !digestPattern.MatchString(artifact.SHA256) {
+		return nil, errors.New("evidence artifact descriptor is invalid")
+	}
+	parent, filename, err := bindArtifactParent(root, artifact.Path)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	afterArtifactParentCheck(root, artifact)
+	if err := parent.Verify(); err != nil {
+		return nil, err
+	}
+	info, err := parent.root.Lstat(filename)
+	if err != nil {
+		return nil, fmt.Errorf("stat evidence artifact: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("evidence artifact is not regular")
+	}
+	afterArtifactLstat(root, artifact)
+	contents, err := readBoundBytes(parent.root, filename, info)
+	if err != nil {
+		return nil, err
+	}
+	if err := parent.Verify(); err != nil {
+		return nil, err
+	}
+	if hashBytes(contents) != artifact.SHA256 {
+		return nil, errors.New("evidence artifact hash does not match manifest")
+	}
+	return contents, nil
+}
+
+// boundArtifactParent pins every directory component to an os.Root descriptor.
+// Path-only Lstat checks are insufficient: a root-internal symlink can replace
+// a checked directory between that check and the artifact open while still
+// resolving to an otherwise valid, same-hash report.
+type boundArtifactParent struct {
+	root     *os.Root
+	bindings []artifactParentBinding
+}
+
+type artifactParentBinding struct {
+	parent   *os.Root
+	child    *os.Root
+	name     string
+	expected os.FileInfo
+}
+
+func bindArtifactParent(root *os.Root, artifactPath string) (*boundArtifactParent, string, error) {
+	dirname := path.Dir(artifactPath)
+	bound := &boundArtifactParent{root: root}
+	if dirname == "." {
+		return bound, path.Base(artifactPath), nil
+	}
+	current := root
+	for _, component := range strings.Split(dirname, "/") {
+		info, err := current.Lstat(component)
+		if err != nil || !validArtifactDirectory(info) {
+			bound.Close()
+			return nil, "", errors.New("evidence artifact parent is not a directory")
+		}
+		child, err := openChildRoot(current, component)
+		if err != nil {
+			bound.Close()
+			return nil, "", errors.New("open evidence artifact parent")
+		}
+		childInfo, err := child.Stat(".")
+		if err != nil || !validArtifactDirectory(childInfo) || !os.SameFile(info, childInfo) {
+			_ = child.Close()
+			bound.Close()
+			return nil, "", errors.New("evidence artifact parent changed before descriptor binding")
+		}
+		bound.bindings = append(bound.bindings, artifactParentBinding{parent: current, child: child, name: component, expected: info})
+		current = child
+	}
+	bound.root = current
+	if err := bound.Verify(); err != nil {
+		bound.Close()
+		return nil, "", err
+	}
+	return bound, path.Base(artifactPath), nil
+}
+
+func validArtifactDirectory(info os.FileInfo) bool {
+	return info != nil && info.Mode()&os.ModeSymlink == 0 && info.IsDir()
+}
+
+// Verify rereads the original descriptor-bound parent chain. It is called
+// before and after artifact content binding, closing both replacement windows.
+func (bound *boundArtifactParent) Verify() error {
+	for _, binding := range bound.bindings {
+		info, err := binding.parent.Lstat(binding.name)
+		if err != nil || !validArtifactDirectory(info) || !os.SameFile(binding.expected, info) {
+			return errors.New("evidence artifact parent changed after descriptor binding")
+		}
+		childInfo, err := binding.child.Stat(".")
+		if err != nil || !validArtifactDirectory(childInfo) || !os.SameFile(binding.expected, childInfo) {
+			return errors.New("evidence artifact parent descriptor changed")
+		}
 	}
 	return nil
+}
+
+func (bound *boundArtifactParent) Close() {
+	for index := len(bound.bindings) - 1; index >= 0; index-- {
+		_ = bound.bindings[index].child.Close()
+	}
 }
 
 func ensureNoSummary(root *os.Root) error {
@@ -552,6 +735,10 @@ func writeBundleBytes(root *os.Root, filename string, data []byte) error {
 		_ = file.Close()
 		return fmt.Errorf("write evidence artifact: %w", err)
 	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync evidence artifact: %w", err)
+	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close evidence artifact: %w", err)
 	}
@@ -578,7 +765,15 @@ func readJSON(root *os.Root, filename string, target any) error {
 	if !bound.Mode().IsRegular() || !os.SameFile(info, bound) {
 		return errors.New("JSON file changed before descriptor binding")
 	}
-	decoder := json.NewDecoder(file)
+	return decodeJSONReader(file, target)
+}
+
+func decodeJSON(contents []byte, target any) error {
+	return decodeJSONReader(bytes.NewReader(contents), target)
+}
+
+func decodeJSONReader(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode JSON: %w", err)
 	}
@@ -768,4 +963,21 @@ func cloneManifest(manifest Manifest) Manifest {
 	manifest.Artifacts = append([]Artifact(nil), manifest.Artifacts...)
 	manifest.Attempts = append([]Attempt(nil), manifest.Attempts...)
 	return manifest
+}
+
+func cloneProtocol(protocol Protocol) Protocol {
+	protocol.ResolvedFlags = append([]string(nil), protocol.ResolvedFlags...)
+	protocol.RuntimeFlags = append([]string(nil), protocol.RuntimeFlags...)
+	return protocol
+}
+
+func cloneSummary(summary Summary) *Summary {
+	clone := summary
+	clone.Warnings = append([]string(nil), summary.Warnings...)
+	clone.Samples = make([]SuccessfulSample, len(summary.Samples))
+	for index, sample := range summary.Samples {
+		clone.Samples[index] = sample
+		clone.Samples[index].Sample.Warnings = append([]string(nil), sample.Sample.Warnings...)
+	}
+	return &clone
 }

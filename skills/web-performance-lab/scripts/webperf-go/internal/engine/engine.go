@@ -23,7 +23,12 @@ import (
 )
 
 const (
-	lighthouseVersion = "13.4.1"
+	// LighthouseVersion is the only Lighthouse release accepted by the engine
+	// and persisted evidence validator.
+	LighthouseVersion = "13.4.1"
+	lighthouseVersion = LighthouseVersion
+	requiredNodeMajor = 22
+	requiredNodeMinor = 19
 	lighthouseCLIPath = "node_modules/lighthouse/cli/index.js"
 	installMarkerPath = ".webperf-engine.json"
 	installPayloadDir = "payload"
@@ -43,10 +48,13 @@ var (
 	ErrInvalidTarget = errors.New("invalid cached engine target")
 	ErrCache         = errors.New("engine cache unavailable")
 	ErrInstall       = errors.New("engine npm ci failed")
+	ErrRawChromePath = errors.New("raw lighthouse cannot override the resolved Chrome path")
 )
 
+var canonicalNodeVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
 type commandRunner interface {
-	Run(context.Context, string, []string, string, io.Writer, io.Writer) error
+	Run(context.Context, string, []string, string, []string, io.Writer, io.Writer) error
 }
 
 type nodeResolver interface {
@@ -142,6 +150,7 @@ func (m Manager) Setup(ctx context.Context) (Status, error) {
 		"npm",
 		[]string{"ci", "--ignore-scripts", "--no-audit", "--no-fund"},
 		staging,
+		executorEnvironment(os.Environ(), ""),
 		io.Discard,
 		io.Discard,
 	); err != nil {
@@ -446,7 +455,7 @@ func (r systemNodeResolver) Version(ctx context.Context, nodePath string) (strin
 		commands = execCommandRunner{terminationGrace: defaultGrace}
 	}
 	var stdout bytes.Buffer
-	if err := commands.Run(ctx, nodePath, []string{"--version"}, "", &stdout, io.Discard); err != nil {
+	if err := commands.Run(ctx, nodePath, []string{"--version"}, "", executorEnvironment(os.Environ(), ""), &stdout, io.Discard); err != nil {
 		return "", ErrNeedsSetup
 	}
 	version := normalizedNodeVersion(stdout.String())
@@ -457,17 +466,22 @@ func (r systemNodeResolver) Version(ctx context.Context, nodePath string) (strin
 }
 
 func supportedNodeVersion(output string) bool {
-	version := normalizedNodeVersion(output)
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 {
+	return SupportsNodeVersion(output)
+}
+
+// SupportsNodeVersion reports whether a canonical MAJOR.MINOR.PATCH Node
+// version meets the same minimum the executor requires.
+func SupportsNodeVersion(version string) bool {
+	if !canonicalNodeVersionPattern.MatchString(version) {
 		return false
 	}
+	parts := strings.Split(version, ".")
 	major, majorErr := strconv.Atoi(parts[0])
 	minor, minorErr := strconv.Atoi(parts[1])
 	if majorErr != nil || minorErr != nil {
 		return false
 	}
-	return major > 22 || (major == 22 && minor >= 19)
+	return major > requiredNodeMajor || (major == requiredNodeMajor && minor >= requiredNodeMinor)
 }
 
 func normalizedNodeVersion(output string) string {
@@ -527,7 +541,7 @@ func (r systemChromeResolver) version(ctx context.Context, chromePath string) (s
 		commands = execCommandRunner{terminationGrace: defaultGrace}
 	}
 	var stdout bytes.Buffer
-	if err := commands.Run(ctx, chromePath, []string{"--version"}, "", &stdout, io.Discard); err != nil {
+	if err := commands.Run(ctx, chromePath, []string{"--version"}, "", nil, &stdout, io.Discard); err != nil {
 		return "", ErrNeedsSetup
 	}
 	version := chromeVersionPattern.FindString(stdout.String())
@@ -602,22 +616,60 @@ func newRunner(runtime Runtime, commands commandRunner) Runner {
 }
 
 func (r Runner) Run(ctx context.Context, request Request) Result {
-	if r.runtime.version != lighthouseVersion || r.runtime.cliPath == "" || r.runtime.nodePath == "" || r.runtime.nodeVersion == "" || r.runtime.chromePath == "" || r.runtime.chromeVersion == "" {
+	if !r.validRuntime() {
 		return Result{ExitCode: contract.ExitNeedsSetup, Err: ErrNeedsSetup}
 	}
-	args := make([]string, 0, 3+len(request.Profile.LighthouseArgs)+len(request.Args))
+	args := make([]string, 0, 2+len(request.Profile.LighthouseArgs)+len(request.Args))
 	args = append(args, r.runtime.cliPath, request.URL)
 	args = append(args, request.Profile.LighthouseArgs...)
-	args = append(args, "--chrome-path="+r.runtime.chromePath)
 	args = append(args, request.Args...)
 	commands := r.commands
 	if commands == nil {
 		commands = execCommandRunner{terminationGrace: defaultGrace}
 	}
-	err := commands.Run(ctx, r.runtime.nodePath, args, "", request.Stdout, request.Stderr)
+	err := commands.Run(ctx, r.runtime.nodePath, args, "", chromeEnvironment(os.Environ(), r.runtime.chromePath), request.Stdout, request.Stderr)
 	if err == nil {
 		return Result{}
 	}
+	exitCode := 1
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	}
+	return Result{ExitCode: exitCode, Err: err}
+}
+
+// RunRaw forwards expert arguments only through the verified Runtime Node and
+// fixed Lighthouse CLI. It injects the Runtime Chrome path and rejects a
+// caller override so raw execution remains tied to its reported browser.
+func (r Runner) RunRaw(ctx context.Context, args []string, stdout, stderr io.Writer) Result {
+	if !r.validRuntime() {
+		return Result{ExitCode: contract.ExitNeedsSetup, Err: ErrNeedsSetup}
+	}
+	for _, arg := range args {
+		if arg == "--chrome-path" || strings.HasPrefix(arg, "--chrome-path=") {
+			return Result{ExitCode: contract.ExitInvalidInput, Err: ErrRawChromePath}
+		}
+	}
+	commandArgs := make([]string, 0, 1+len(args))
+	commandArgs = append(commandArgs, r.runtime.cliPath)
+	commandArgs = append(commandArgs, args...)
+	commands := r.commands
+	if commands == nil {
+		commands = execCommandRunner{terminationGrace: defaultGrace}
+	}
+	err := commands.Run(ctx, r.runtime.nodePath, commandArgs, "", chromeEnvironment(os.Environ(), r.runtime.chromePath), stdout, stderr)
+	if err == nil {
+		return Result{}
+	}
+	return commandResult(err)
+}
+
+func (r Runner) validRuntime() bool {
+	return r.runtime.version == lighthouseVersion && r.runtime.cliPath != "" && r.runtime.nodePath != "" && r.runtime.nodeVersion != "" && r.runtime.chromePath != "" && r.runtime.chromeVersion != ""
+}
+
+func commandResult(err error) Result {
 	exitCode := 1
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
@@ -630,12 +682,15 @@ type execCommandRunner struct {
 	terminationGrace time.Duration
 }
 
-func (r execCommandRunner) Run(ctx context.Context, name string, args []string, dir string, stdout, stderr io.Writer) error {
+func (r execCommandRunner) Run(ctx context.Context, name string, args []string, dir string, environment []string, stdout, stderr io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	if environment != nil {
+		cmd.Env = append([]string(nil), environment...)
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	owned, err := startOwnedCommand(cmd)
@@ -673,4 +728,33 @@ func (r execCommandRunner) Run(ctx context.Context, name string, args []string, 
 	}
 	owned.release()
 	return ctx.Err()
+}
+
+// chromeEnvironment removes inherited browser and Node module-loading
+// overrides before adding the runtime-verified Chrome path. NODE_OPTIONS can
+// preload code (for example with --require or --import), while NODE_PATH
+// changes module resolution; neither may influence the locked Lighthouse
+// process. Windows environment keys are case-insensitive, so filtering is
+// intentionally case-insensitive everywhere.
+func chromeEnvironment(base []string, chromePath string) []string {
+	return executorEnvironment(base, chromePath)
+}
+
+func executorEnvironment(base []string, chromePath string) []string {
+	environment := make([]string, 0, len(base)+1)
+	for _, item := range base {
+		name, _, found := strings.Cut(item, "=")
+		if found && blockedRuntimeEnvironment(name) {
+			continue
+		}
+		environment = append(environment, item)
+	}
+	if chromePath != "" {
+		environment = append(environment, "CHROME_PATH="+chromePath)
+	}
+	return environment
+}
+
+func blockedRuntimeEnvironment(name string) bool {
+	return strings.EqualFold(name, "CHROME_PATH") || strings.EqualFold(name, "NODE_OPTIONS") || strings.EqualFold(name, "NODE_PATH")
 }

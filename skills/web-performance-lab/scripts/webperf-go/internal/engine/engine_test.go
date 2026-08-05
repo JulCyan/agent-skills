@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -21,7 +22,7 @@ import (
 
 func TestRuntimeNeverUsesGlobalLighthouse(t *testing.T) {
 	commands := &recordingCommandRunner{
-		run: func(context.Context, string, []string, string, io.Writer, io.Writer) error {
+		run: func(context.Context, string, []string, string, []string, io.Writer, io.Writer) error {
 			t.Fatal("runtime queried an external command")
 			return nil
 		},
@@ -46,7 +47,7 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 	commands := &recordingCommandRunner{}
 	manager := testManager(t, commands)
 	target := manager.targetDir(t)
-	commands.run = func(gotCtx context.Context, name string, args []string, dir string, stdout, stderr io.Writer) error {
+	commands.run = func(gotCtx context.Context, name string, args []string, dir string, environment []string, stdout, stderr io.Writer) error {
 		if gotCtx.Value(ctxKey) != "setup-context" {
 			t.Fatal("setup context was not propagated")
 		}
@@ -56,6 +57,9 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 		wantArgs := []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund"}
 		if !reflect.DeepEqual(args, wantArgs) {
 			t.Fatalf("args=%v want=%v", args, wantArgs)
+		}
+		if environment == nil || hasEnvironmentKey(environment, "NODE_OPTIONS") || hasEnvironmentKey(environment, "NODE_PATH") || hasEnvironmentKey(environment, "CHROME_PATH") {
+			t.Fatalf("npm environment is not executor-owned: %v", environment)
 		}
 		if filepath.Dir(dir) != filepath.Dir(target) || !strings.HasPrefix(filepath.Base(dir), ".13.4.1.staging-") {
 			t.Fatalf("staging dir is not a unique target sibling: %q", dir)
@@ -98,6 +102,68 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 		if strings.Contains(entry.Name(), ".staging-") {
 			t.Fatalf("staging directory was not cleaned: %q", entry.Name())
 		}
+	}
+}
+
+func TestSystemNodeResolverAndManagerRuntimeDoNotExecuteInheritedNodePreload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper uses a Node shebang")
+	}
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	preload := filepath.Join(directory, "preload.cjs")
+	sentinel := filepath.Join(directory, "preload-executed")
+	if err := os.WriteFile(preload, []byte(`require("node:fs").writeFileSync(process.env.WEBPERF_PRELOAD_SENTINEL, "executed")`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NODE_OPTIONS", "--require="+preload)
+	t.Setenv("NODE_PATH", directory)
+	t.Setenv("WEBPERF_PRELOAD_SENTINEL", sentinel)
+
+	fakeNode := filepath.Join(directory, "node")
+	if err := os.WriteFile(fakeNode, []byte("#!/usr/bin/env node\nprocess.stdout.write(\"v24.16.0\\n\")\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(nodePath)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	resolver := systemNodeResolver{lookPath: func(string) (string, error) { return fakeNode, nil }}
+	if _, err := resolver.Version(context.Background(), fakeNode); err != nil {
+		t.Fatal(err)
+	}
+	manager := Manager{
+		cacheRoot: t.TempDir(),
+		node:      resolver,
+		chrome:    staticChromeResolver{path: "/test/bin/chrome", version: "150.0.0.0"},
+	}
+	installFixture(t, manager.targetDir(t), lighthouseVersion)
+	if _, err := manager.Runtime(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(sentinel); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inherited NODE_OPTIONS preload executed: %v", err)
+	}
+}
+
+func TestSupportsNodeVersionRequiresCanonicalMajorMinorPatch(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{version: "22.19.0", want: true},
+		{version: "24.0.0", want: true},
+		{version: "24.0", want: false},
+		{version: "24.0.foo", want: false},
+		{version: "24.0.0.0", want: false},
+		{version: "24.0.0-extra", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			if got := SupportsNodeVersion(tt.version); got != tt.want {
+				t.Fatalf("SupportsNodeVersion(%q)=%t want=%t", tt.version, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -180,7 +246,7 @@ func TestSetupDoesNotReplaceTargetCreatedDuringNPM(t *testing.T) {
 			commands := &recordingCommandRunner{}
 			manager := testManager(t, commands)
 			target := manager.targetDir(t)
-			commands.run = func(context.Context, string, []string, string, io.Writer, io.Writer) error {
+			commands.run = func(context.Context, string, []string, string, []string, io.Writer, io.Writer) error {
 				installUnmanagedFixture(t, commands.calls[len(commands.calls)-1].dir, lighthouseVersion)
 				tt.create(t, target)
 				return nil
@@ -214,7 +280,7 @@ func TestSetupRollsBackOnlyEmptyClaimAfterRenameFailure(t *testing.T) {
 			commands := &recordingCommandRunner{}
 			manager := testManager(t, commands)
 			target := manager.targetDir(t)
-			commands.run = func(_ context.Context, _ string, _ []string, dir string, _ io.Writer, _ io.Writer) error {
+			commands.run = func(_ context.Context, _ string, _ []string, dir string, _ []string, _ io.Writer, _ io.Writer) error {
 				installUnmanagedFixture(t, dir, lighthouseVersion)
 				return nil
 			}
@@ -265,7 +331,7 @@ func TestSetupRollsBackOnlyEmptyClaimAfterRenameFailure(t *testing.T) {
 func TestSetupFailureCleansStagingDirectory(t *testing.T) {
 	commands := &recordingCommandRunner{}
 	manager := testManager(t, commands)
-	commands.run = func(context.Context, string, []string, string, io.Writer, io.Writer) error {
+	commands.run = func(context.Context, string, []string, string, []string, io.Writer, io.Writer) error {
 		return errors.New("npm failed in " + manager.cacheRoot)
 	}
 
@@ -457,7 +523,7 @@ func TestRuntimeRequiresNodeAtLeast2219(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			commands := &recordingCommandRunner{}
-			commands.run = func(_ context.Context, name string, args []string, _ string, stdout, _ io.Writer) error {
+			commands.run = func(_ context.Context, name string, args []string, _ string, _ []string, stdout, _ io.Writer) error {
 				if name == "node" {
 					t.Fatal("runtime used unresolved PATH node")
 				}
@@ -525,7 +591,7 @@ func TestRunnerUsesLockedCLIAndProfileArgumentsWithoutShell(t *testing.T) {
 	}
 	ctxKey := struct{}{}
 	ctx := context.WithValue(context.Background(), ctxKey, "runner-context")
-	commands.run = func(gotCtx context.Context, name string, args []string, dir string, stdout, stderr io.Writer) error {
+	commands.run = func(gotCtx context.Context, name string, args []string, dir string, environment []string, stdout, stderr io.Writer) error {
 		if gotCtx.Value(ctxKey) != "runner-context" {
 			t.Fatal("runner context was not propagated")
 		}
@@ -537,11 +603,13 @@ func TestRunnerUsesLockedCLIAndProfileArgumentsWithoutShell(t *testing.T) {
 			"https://example.com/product?a=1&b=2",
 			"--form-factor=desktop",
 			"--throttling-method=provided",
-			"--chrome-path=/test/bin/chrome",
 			"--output=json",
 		}
 		if !reflect.DeepEqual(args, wantArgs) {
 			t.Fatalf("args=%v want=%v", args, wantArgs)
+		}
+		if got := chromePathValue(environment); got != "/test/bin/chrome" {
+			t.Fatalf("CHROME_PATH=%q env=%v", got, environment)
 		}
 		return nil
 	}
@@ -573,6 +641,79 @@ func TestRunnerRejectsUnverifiedRuntime(t *testing.T) {
 	}
 }
 
+func TestRunnerRunRawUsesOnlyLockedNodeCLIAndResolvedChrome(t *testing.T) {
+	commands := &recordingCommandRunner{}
+	manager := testManager(t, commands)
+	installFixture(t, manager.targetDir(t), lighthouseVersion)
+	runtime, err := manager.Runtime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := newRunner(runtime, commands).RunRaw(context.Background(), []string{"--output=json", "https://example.test"}, io.Discard, io.Discard)
+	if result.Err != nil || result.ExitCode != 0 || len(commands.calls) != 1 {
+		t.Fatalf("result=%+v calls=%+v", result, commands.calls)
+	}
+	call := commands.calls[0]
+	if call.name != runtime.NodePath() {
+		t.Fatalf("command=%q", call.name)
+	}
+	want := []string{runtime.CLIPath(), "--output=json", "https://example.test"}
+	if !reflect.DeepEqual(call.args, want) {
+		t.Fatalf("args=%v want=%v", call.args, want)
+	}
+	if got := chromePathValue(call.env); got != "/test/bin/chrome" {
+		t.Fatalf("CHROME_PATH=%q env=%v", got, call.env)
+	}
+}
+
+func TestRunnerRunRawRejectsUserChromePath(t *testing.T) {
+	result := newRunner(Runtime{version: lighthouseVersion, cliPath: "cli", nodePath: "node", nodeVersion: "24.16.0", chromePath: "chrome", chromeVersion: "150.0.0.0"}, &recordingCommandRunner{}).RunRaw(context.Background(), []string{"--chrome-path=other"}, io.Discard, io.Discard)
+	if !errors.Is(result.Err, ErrRawChromePath) {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestChromeEnvironmentReplacesInheritedChromePathCaseInsensitively(t *testing.T) {
+	got := chromeEnvironment([]string{"KEEP=value", "CHROME_PATH=/attacker/chrome", "chrome_path=C:\\attacker\\chrome", "Chrome_Path=other"}, "/verified/chrome")
+	want := []string{"KEEP=value", "CHROME_PATH=/verified/chrome"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("env=%v want=%v", got, want)
+	}
+}
+
+func TestChromeEnvironmentPreventsInheritedNodePreloadExecution(t *testing.T) {
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	preload := filepath.Join(directory, "preload.cjs")
+	sentinel := filepath.Join(directory, "preload-executed")
+	if err := os.WriteFile(preload, []byte(`require("node:fs").writeFileSync(process.env.WEBPERF_PRELOAD_SENTINEL, "executed")`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := chromeEnvironment(append(os.Environ(), "NODE_OPTIONS=--require="+preload, "NODE_PATH="+directory, "WEBPERF_PRELOAD_SENTINEL="+sentinel), "/verified/chrome")
+	var stdout bytes.Buffer
+	err = (execCommandRunner{terminationGrace: defaultGrace}).Run(context.Background(), nodePath, []string{"-e", `process.stdout.write("ok")`}, "", environment, &stdout, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "ok" {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if _, err := os.Lstat(sentinel); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inherited NODE_OPTIONS preload executed: %v", err)
+	}
+	for _, blocked := range []string{"NODE_OPTIONS", "NODE_PATH"} {
+		for _, item := range environment {
+			name, value, found := strings.Cut(item, "=")
+			if found && strings.EqualFold(name, blocked) {
+				t.Fatalf("%s survived sanitization: %q", blocked, value)
+			}
+		}
+	}
+}
+
 func TestOwnedCommandStopsAfterContextCancellation(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -586,6 +727,7 @@ func TestOwnedCommandStopsAfterContextCancellation(t *testing.T) {
 		executable,
 		[]string{"-test.run=^TestEngineHelperProcess$"},
 		"",
+		nil,
 		io.Discard,
 		io.Discard,
 	)
@@ -614,6 +756,7 @@ func TestOwnedCommandKillsDescendantsThatIgnoreTermination(t *testing.T) {
 			executable,
 			[]string{"-test.run=^TestEngineProcessTreeHelper$", "-test.outputdir=" + helperDir},
 			"",
+			nil,
 			io.Discard,
 			io.Discard,
 		)
@@ -666,6 +809,7 @@ func TestOwnedCommandRetainsDistinctGroupLeaderUntilCleanup(t *testing.T) {
 			executable,
 			[]string{"-test.run=^TestEngineOwnedTargetHelper$", "-test.outputdir=" + helperDir},
 			"",
+			nil,
 			io.Discard,
 			io.Discard,
 		)
@@ -832,6 +976,7 @@ func TestEngineAbruptOwnerHelper(t *testing.T) {
 		os.Args[0],
 		[]string{"-test.run=^TestEngineOwnedTargetHelper$", "-test.outputdir=" + outputDir},
 		"",
+		nil,
 		io.Discard,
 		io.Discard,
 	)
@@ -894,19 +1039,40 @@ type commandCall struct {
 	name string
 	args []string
 	dir  string
+	env  []string
 }
 
 type recordingCommandRunner struct {
 	calls []commandCall
-	run   func(context.Context, string, []string, string, io.Writer, io.Writer) error
+	run   func(context.Context, string, []string, string, []string, io.Writer, io.Writer) error
 }
 
-func (r *recordingCommandRunner) Run(ctx context.Context, name string, args []string, dir string, stdout, stderr io.Writer) error {
-	r.calls = append(r.calls, commandCall{name: name, args: append([]string(nil), args...), dir: dir})
+func (r *recordingCommandRunner) Run(ctx context.Context, name string, args []string, dir string, environment []string, stdout, stderr io.Writer) error {
+	r.calls = append(r.calls, commandCall{name: name, args: append([]string(nil), args...), dir: dir, env: append([]string(nil), environment...)})
 	if r.run != nil {
-		return r.run(ctx, name, args, dir, stdout, stderr)
+		return r.run(ctx, name, args, dir, environment, stdout, stderr)
 	}
 	return nil
+}
+
+func chromePathValue(environment []string) string {
+	for _, item := range environment {
+		name, value, found := strings.Cut(item, "=")
+		if found && strings.EqualFold(name, "CHROME_PATH") {
+			return value
+		}
+	}
+	return ""
+}
+
+func hasEnvironmentKey(environment []string, want string) bool {
+	for _, item := range environment {
+		name, _, found := strings.Cut(item, "=")
+		if found && strings.EqualFold(name, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func testManager(t *testing.T, commands commandRunner) Manager {

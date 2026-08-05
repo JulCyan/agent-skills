@@ -232,7 +232,7 @@ func TestStoreWritesPrivateArtifactsAndFinalizesManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteArtifact("samples/run-1.lhr.json", []byte(`{"fixture":true}`)); err != nil {
+	if _, err := store.WriteArtifact("samples/run-1.lhr.json", []byte(`{"fixture":true}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Finalize(
@@ -252,6 +252,84 @@ func TestStoreWritesPrivateArtifactsAndFinalizesManifest(t *testing.T) {
 	}
 	if opened.Protocol().Fingerprint == "" {
 		t.Fatal("protocol fingerprint was not persisted")
+	}
+}
+
+func TestOpenReadsHashVerifiedSummaryAndClonesMutableSlices(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "run")
+	store, err := Create(target, Manifest{Status: "RUNNING"}, completeProtocol())
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := Summary{
+		SchemaVersion:  1,
+		Status:         "OK",
+		Profile:        "desktop-lab-v1",
+		RequestedRuns:  3,
+		SuccessfulRuns: 3,
+		Samples:        []SuccessfulSample{{Attempt: 1}, {Attempt: 2}, {Attempt: 3}},
+		Warnings:       []string{"synthetic warning"},
+	}
+	if err := store.Finalize(Manifest{Status: "OK"}, &summary); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := opened.Summary()
+	if err != nil || got == nil || got.Status != "OK" {
+		t.Fatalf("summary=%+v err=%v", got, err)
+	}
+	got.Warnings[0] = "mutated"
+	again, err := opened.Summary()
+	if err != nil || again.Warnings[0] != "synthetic warning" {
+		t.Fatalf("summary=%+v err=%v", again, err)
+	}
+	protocol := opened.Protocol()
+	protocol.ResolvedFlags[0] = "mutated"
+	if opened.Protocol().ResolvedFlags[0] == "mutated" {
+		t.Fatal("Protocol returned an aliased flag slice")
+	}
+}
+
+func TestValidateProtocolRejectsMissingOrStaleFingerprint(t *testing.T) {
+	if err := ValidateProtocol(Protocol{}); err == nil {
+		t.Fatal("ValidateProtocol accepted missing fields")
+	}
+	broken := completeProtocol()
+	broken.Fingerprint = "stale"
+	if err := ValidateProtocol(broken); err == nil {
+		t.Fatal("ValidateProtocol accepted a stale fingerprint")
+	}
+}
+
+func TestSummaryDoesNotReturnReplacementAfterHashValidation(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "run")
+	store, err := Create(target, Manifest{Status: "RUNNING"}, completeProtocol())
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := Summary{SchemaVersion: 1, Status: "OK", Profile: "desktop-lab-v1", RequestedRuns: 3, Samples: []SuccessfulSample{{Attempt: 1}, {Attempt: 2}, {Attempt: 3}}}
+	if err := store.Finalize(Manifest{Status: "OK"}, &summary); err != nil {
+		t.Fatal(err)
+	}
+	originalHook := afterSummaryHashVerified
+	afterSummaryHashVerified = func(_ *os.Root) {
+		if err := os.Remove(filepath.Join(target, summaryFile)); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(target, summaryFile), []byte(`{"status":"replacement"}`), 0o600)
+	}
+	t.Cleanup(func() { afterSummaryHashVerified = originalHook })
+
+	opened, err := Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := opened.Summary()
+	if err != nil || got == nil || got.Status != "OK" {
+		t.Fatalf("summary=%+v err=%v", got, err)
 	}
 }
 
@@ -635,7 +713,7 @@ func TestFinalizeRejectsDifferingExistingSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteArtifact(summaryFile, []byte(`{"status":"foreign"}`)); err != nil {
+	if _, err := store.WriteArtifact(summaryFile, []byte(`{"status":"foreign"}`)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -655,7 +733,7 @@ func TestFinalizeWithoutAggregateRejectsExistingSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteArtifact(summaryFile, []byte(`{"status":"unanchored"}`)); err != nil {
+	if _, err := store.WriteArtifact(summaryFile, []byte(`{"status":"unanchored"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Finalize(Manifest{Status: "PARTIAL"}, nil); err == nil {
@@ -696,10 +774,10 @@ func TestOpenRejectsFinalManifestWithoutSummaryHashWhenSummaryExists(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteArtifact(manifestFile, []byte(`{"status":"PARTIAL"}`)); err != nil {
+	if _, err := store.WriteArtifact(manifestFile, []byte(`{"status":"PARTIAL"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteArtifact(summaryFile, []byte(`{"status":"unanchored"}`)); err != nil {
+	if _, err := store.WriteArtifact(summaryFile, []byte(`{"status":"unanchored"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(target); err == nil {
@@ -708,7 +786,7 @@ func TestOpenRejectsFinalManifestWithoutSummaryHashWhenSummaryExists(t *testing.
 }
 
 func TestCreateRejectsAbsoluteAndEscapingArtifactPaths(t *testing.T) {
-	cases := []string{"/tmp/lhr.json", "../lhr.json", ""}
+	cases := []string{"/tmp/lhr.json", "../lhr.json", "", "C:/evidence/lhr.json", "C:\\evidence\\lhr.json", "//server/share/lhr.json", "samples/run:1.lhr.json"}
 	for _, path := range cases {
 		t.Run(path, func(t *testing.T) {
 			_, err := Create(filepath.Join(t.TempDir(), "run"), Manifest{Artifacts: []Artifact{{Path: path}}}, Protocol{})
@@ -809,4 +887,20 @@ func createBundle(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return target
+}
+
+func completeProtocol() Protocol {
+	return CompleteProtocol(Protocol{
+		SchemaVersion:     1,
+		Profile:           "desktop-lab-v1",
+		FormFactor:        "desktop",
+		ThrottlingMethod:  "simulate",
+		ResolvedFlags:     []string{"--preset=desktop", "--throttling-method=simulate"},
+		RuntimeFlags:      ExpectedRuntimeFlags(),
+		LighthouseVersion: "13.4.1",
+		NodeVersion:       "24.16.0",
+		ChromeVersion:     "150.0.0.0",
+		OS:                "darwin",
+		Arch:              "arm64",
+	})
 }

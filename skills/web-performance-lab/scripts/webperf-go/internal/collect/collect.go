@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/bundle"
@@ -19,7 +18,6 @@ import (
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/lhr"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/profile"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/safeurl"
-	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/stats"
 )
 
 var (
@@ -90,27 +88,25 @@ func (s Service) Run(ctx context.Context, request Request) (bundle.Summary, erro
 		RequestedRuns:  request.Runs,
 		SuccessfulRuns: 0,
 	}
-	rawFinalURLs := make(map[string]struct{})
+	warningSignals := bundle.WarningSignals{}
 	for attemptNumber := 1; attemptNumber <= request.Runs; attemptNumber++ {
 		if err := ctx.Err(); err != nil {
 			manifest.Status = string(contract.Interrupted)
 			summary.Status = string(contract.Interrupted)
-			return s.finalize(ctx, store, manifest, summary, now, nil, err)
+			return s.finalize(ctx, store, manifest, summary, warningSignals, now, nil, err)
 		}
 
 		attempt := bundle.Attempt{Number: attemptNumber, StartedAt: now().UTC().Format(time.RFC3339Nano)}
 		raw, result, cleanupErr := s.runAttempt(ctx, request, attemptNumber)
 		attempt.FinishedAt = now().UTC().Format(time.RFC3339Nano)
-		if cleanupErr != nil {
-			addWarning(&summary, "temporary browser cleanup failed")
-		}
+		attempt.CleanupFailed = cleanupErr != nil
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			attempt.Status = string(contract.Interrupted)
 			attempt.Error = "interrupted"
 			manifest.Attempts = append(manifest.Attempts, attempt)
 			manifest.Status = string(contract.Interrupted)
 			summary.Status = string(contract.Interrupted)
-			return s.finalize(ctx, store, manifest, summary, now, nil, ctxErr)
+			return s.finalize(ctx, store, manifest, summary, warningSignals, now, nil, ctxErr)
 		}
 		if result.Err != nil || result.ExitCode != 0 {
 			attempt.Status = string(contract.EngineFailed)
@@ -127,16 +123,17 @@ func (s Service) Run(ctx context.Context, request Request) (bundle.Summary, erro
 			manifest.Attempts = append(manifest.Attempts, attempt)
 			manifest.Status = string(contract.Interrupted)
 			summary.Status = string(contract.Interrupted)
-			return s.finalize(ctx, store, manifest, summary, now, nil, ctxErr)
+			return s.finalize(ctx, store, manifest, summary, warningSignals, now, nil, ctxErr)
 		}
-		if err := store.WriteArtifact(artifactPath, raw); err != nil {
+		artifactSHA256, err := store.WriteArtifact(artifactPath, raw)
+		if err != nil {
 			attempt.Status = string(contract.EngineFailed)
 			attempt.Error = "evidence write failed"
 			manifest.Attempts = append(manifest.Attempts, attempt)
 			continue
 		}
 		attempt.Artifact = artifactPath
-		manifest.Artifacts = append(manifest.Artifacts, bundle.Artifact{Kind: "lhr", Path: artifactPath})
+		manifest.Artifacts = append(manifest.Artifacts, bundle.Artifact{Kind: "lhr", Path: artifactPath, SHA256: artifactSHA256})
 		if s.AfterArtifact != nil {
 			s.AfterArtifact()
 		}
@@ -146,7 +143,7 @@ func (s Service) Run(ctx context.Context, request Request) (bundle.Summary, erro
 			manifest.Attempts = append(manifest.Attempts, attempt)
 			manifest.Status = string(contract.Interrupted)
 			summary.Status = string(contract.Interrupted)
-			return s.finalize(ctx, store, manifest, summary, now, nil, ctxErr)
+			return s.finalize(ctx, store, manifest, summary, warningSignals, now, nil, ctxErr)
 		}
 
 		sample, err := lhr.Parse(raw)
@@ -162,13 +159,13 @@ func (s Service) Run(ctx context.Context, request Request) (bundle.Summary, erro
 			manifest.Attempts = append(manifest.Attempts, attempt)
 			continue
 		}
-		rawFinalURLs[sample.FinalURL] = struct{}{}
+		warningSignals.RawFinalURLs = append(warningSignals.RawFinalURLs, sample.FinalURL)
 		sample, warning := sanitizeSample(sample)
 		if warning != "" {
-			addWarning(&summary, warning)
+			warningSignals.InvalidFinalURL = true
 		}
 		if len(sample.Warnings) > 0 {
-			addWarning(&summary, fmt.Sprintf("Lighthouse reported warnings on attempt %d", attemptNumber))
+			warningSignals.LighthouseWarningAttempts = append(warningSignals.LighthouseWarningAttempts, attemptNumber)
 			sample.Warnings = nil
 		}
 		if summary.FinalURL == "" && sample.FinalURL != "" {
@@ -185,13 +182,10 @@ func (s Service) Run(ctx context.Context, request Request) (bundle.Summary, erro
 	}
 
 	summary.SuccessfulRuns = len(summary.Samples)
-	if hasFailedAttempt(manifest.Attempts) {
-		addWarning(&summary, "one or more attempts failed")
-	}
 	if len(summary.Samples) < minimumSuccessfulSamples {
 		manifest.Status = string(contract.Partial)
 		summary.Status = string(contract.Partial)
-		return s.finalize(ctx, store, manifest, summary, now, nil, ErrIncomplete)
+		return s.finalize(ctx, store, manifest, summary, warningSignals, now, nil, ErrIncomplete)
 	}
 	resultErr := error(nil)
 	if hasNonOKAttempt(manifest.Attempts) {
@@ -202,8 +196,7 @@ func (s Service) Run(ctx context.Context, request Request) (bundle.Summary, erro
 		summary.Status = string(contract.OK)
 		manifest.Status = string(contract.OK)
 	}
-	addInstabilityWarnings(&summary, len(rawFinalURLs) > 1)
-	return s.finalize(ctx, store, manifest, summary, now, &summary, resultErr)
+	return s.finalize(ctx, store, manifest, summary, warningSignals, now, &summary, resultErr)
 }
 
 func validateRequest(request Request) error {
@@ -218,7 +211,7 @@ func validateRequest(request Request) error {
 		return fmt.Errorf("%w: display URL must be the safe rendering of the requested URL", ErrInvalidRequest)
 	}
 	protocol := request.Protocol
-	if protocol.Profile == "" || protocol.FormFactor == "" || protocol.ThrottlingMethod == "" || protocol.LighthouseVersion == "" || protocol.NodeVersion == "" || protocol.ChromeVersion == "" || protocol.OS == "" || protocol.Arch == "" || len(protocol.ResolvedFlags) == 0 || len(protocol.RuntimeFlags) == 0 {
+	if err := bundle.ValidateProtocol(protocol); err != nil {
 		return fmt.Errorf("%w: complete measurement protocol is required", ErrInvalidRequest)
 	}
 	if request.Profile.Name != protocol.Profile || request.Profile.FormFactor != protocol.FormFactor || request.Profile.ThrottlingMethod != protocol.ThrottlingMethod || !equalStrings(request.Profile.LighthouseArgs, protocol.ResolvedFlags) {
@@ -230,15 +223,6 @@ func validateRequest(request Request) error {
 func hasNonOKAttempt(attempts []bundle.Attempt) bool {
 	for _, attempt := range attempts {
 		if attempt.Status != string(contract.OK) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasFailedAttempt(attempts []bundle.Attempt) bool {
-	for _, attempt := range attempts {
-		if attempt.Status != string(contract.OK) && attempt.Status != string(contract.Partial) {
 			return true
 		}
 	}
@@ -293,7 +277,7 @@ func (s Service) runAttempt(ctx context.Context, request Request, attempt int) (
 	return stdout.Bytes(), result, nil
 }
 
-func (s Service) finalize(ctx context.Context, store *bundle.Store, manifest bundle.Manifest, summary bundle.Summary, now func() time.Time, aggregate *bundle.Summary, resultErr error) (bundle.Summary, error) {
+func (s Service) finalize(ctx context.Context, store *bundle.Store, manifest bundle.Manifest, summary bundle.Summary, warningSignals bundle.WarningSignals, now func() time.Time, aggregate *bundle.Summary, resultErr error) (bundle.Summary, error) {
 	summary.SuccessfulRuns = len(summary.Samples)
 	if s.BeforeFinalize != nil {
 		s.BeforeFinalize()
@@ -305,8 +289,10 @@ func (s Service) finalize(ctx context.Context, store *bundle.Store, manifest bun
 		resultErr = ctxErr
 	}
 	manifest.FinishedAt = now().UTC().Format(time.RFC3339Nano)
-	normalizeWarnings(&summary)
+	summary.Warnings = bundle.CanonicalWarnings(manifest.Attempts, summary.Samples, warningSignals)
 	if aggregate != nil {
+		summary.Metrics = bundle.SummarizeSamples(summary.Samples)
+		aggregate.Metrics = summary.Metrics
 		aggregate.Warnings = append([]string(nil), summary.Warnings...)
 	}
 	if err := store.Finalize(manifest, aggregate); err != nil {
@@ -326,108 +312,10 @@ func sanitizeSample(sample lhr.Sample) (lhr.Sample, string) {
 }
 
 func addInstabilityWarnings(summary *bundle.Summary, rawFinalURLChanged bool) {
-	if len(summary.Samples) == 0 {
-		return
+	var signals bundle.WarningSignals
+	if rawFinalURLChanged {
+		signals.RawFinalURLs = []string{"first", "second"}
 	}
-	finalURLs := make(map[string]struct{})
-	selectors := make(map[string]struct{})
-	values := metricValues(summary.Samples)
-	for _, item := range summary.Samples {
-		finalURLs[item.Sample.FinalURL] = struct{}{}
-		selector := item.Sample.LCPSelector
-		if selector == "" {
-			selector = "<missing>"
-		}
-		selectors[selector] = struct{}{}
-	}
-	if rawFinalURLChanged || len(finalURLs) > 1 {
-		addWarning(summary, "final URL changed across successful samples")
-	}
-	if len(selectors) > 1 {
-		addWarning(summary, "LCP selector changed across successful samples")
-	}
-	summary.Metrics = summarizeMetrics(values)
-	// Timing uses a relative 10% IQR floor with a 100 ms absolute floor (50 ms
-	// for TBT); score and CLS use their comparison materiality floors. These
-	// fixed floors prevent a zero median from hiding instability or generating
-	// warnings for minute numerical noise.
-	for _, item := range []struct {
-		name  string
-		data  stats.Distribution
-		floor float64
-	}{
-		{name: "FCP", data: summary.Metrics.FCP, floor: 100},
-		{name: "LCP", data: summary.Metrics.LCP, floor: 100},
-		{name: "Speed Index", data: summary.Metrics.SpeedIndex, floor: 100},
-		{name: "TBT", data: summary.Metrics.TBT, floor: 50},
-	} {
-		if item.data.IQR >= max(item.floor, 0.10*item.data.Median) {
-			addWarning(summary, "high dispersion for "+item.name)
-		}
-	}
-	if summary.Metrics.PerformanceScore.IQR >= 5 {
-		addWarning(summary, "high dispersion for Performance Score")
-	}
-	if summary.Metrics.CLS.IQR >= 0.02 {
-		addWarning(summary, "high dispersion for CLS")
-	}
-	normalizeWarnings(summary)
-}
-
-func addWarning(summary *bundle.Summary, warning string) {
-	if warning == "" {
-		return
-	}
-	summary.Warnings = append(summary.Warnings, warning)
-}
-
-func normalizeWarnings(summary *bundle.Summary) {
-	if len(summary.Warnings) == 0 {
-		return
-	}
-	sort.Strings(summary.Warnings)
-	unique := summary.Warnings[:0]
-	for _, warning := range summary.Warnings {
-		if len(unique) == 0 || unique[len(unique)-1] != warning {
-			unique = append(unique, warning)
-		}
-	}
-	summary.Warnings = unique
-}
-
-type collectedValues struct {
-	performanceScore []float64
-	fcp              []float64
-	lcp              []float64
-	speedIndex       []float64
-	tbt              []float64
-	cls              []float64
-	benchmarkIndex   []float64
-}
-
-func metricValues(samples []bundle.SuccessfulSample) collectedValues {
-	values := collectedValues{}
-	for _, item := range samples {
-		sample := item.Sample
-		values.performanceScore = append(values.performanceScore, sample.PerformanceScore)
-		values.fcp = append(values.fcp, sample.FCP)
-		values.lcp = append(values.lcp, sample.LCP)
-		values.speedIndex = append(values.speedIndex, sample.SpeedIndex)
-		values.tbt = append(values.tbt, sample.TBT)
-		values.cls = append(values.cls, sample.CLS)
-		values.benchmarkIndex = append(values.benchmarkIndex, sample.BenchmarkIndex)
-	}
-	return values
-}
-
-func summarizeMetrics(values collectedValues) bundle.Metrics {
-	return bundle.Metrics{
-		PerformanceScore: stats.Summarize(values.performanceScore),
-		FCP:              stats.Summarize(values.fcp),
-		LCP:              stats.Summarize(values.lcp),
-		SpeedIndex:       stats.Summarize(values.speedIndex),
-		TBT:              stats.Summarize(values.tbt),
-		CLS:              stats.Summarize(values.cls),
-		BenchmarkIndex:   stats.Summarize(values.benchmarkIndex),
-	}
+	summary.Metrics = bundle.SummarizeSamples(summary.Samples)
+	summary.Warnings = bundle.CanonicalWarnings(nil, summary.Samples, signals)
 }

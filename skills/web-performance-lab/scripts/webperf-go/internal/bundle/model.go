@@ -19,8 +19,9 @@ var (
 
 // Artifact identifies evidence relative to its containing bundle directory.
 type Artifact struct {
-	Kind string `json:"kind,omitempty"`
-	Path string `json:"path"`
+	Kind   string `json:"kind,omitempty"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 // Manifest records the run-level evidence identity and paths. Fields may be
@@ -41,13 +42,14 @@ type Manifest struct {
 // intentionally short status labels so caller-supplied URLs and engine output
 // never become persisted evidence metadata.
 type Attempt struct {
-	Number     int    `json:"number"`
-	Status     string `json:"status"`
-	ExitCode   int    `json:"exitCode,omitempty"`
-	StartedAt  string `json:"startedAt,omitempty"`
-	FinishedAt string `json:"finishedAt,omitempty"`
-	Artifact   string `json:"artifact,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Number        int    `json:"number"`
+	Status        string `json:"status"`
+	ExitCode      int    `json:"exitCode,omitempty"`
+	StartedAt     string `json:"startedAt,omitempty"`
+	FinishedAt    string `json:"finishedAt,omitempty"`
+	Artifact      string `json:"artifact,omitempty"`
+	Error         string `json:"error,omitempty"`
+	CleanupFailed bool   `json:"cleanupFailed,omitempty"`
 }
 
 // Protocol records the resolved profile and runtime fingerprint for a bundle.
@@ -115,6 +117,10 @@ func CompleteProtocol(protocol Protocol) Protocol {
 	protocol.Fingerprint = protocolFingerprint(protocol)
 	return protocol
 }
+
+// ProtocolFingerprint returns the canonical fingerprint input hash. Callers
+// validating persisted evidence must still require every protocol field.
+func ProtocolFingerprint(protocol Protocol) string { return protocolFingerprint(protocol) }
 
 func protocolFingerprint(protocol Protocol) string {
 	type fingerprintInput struct {

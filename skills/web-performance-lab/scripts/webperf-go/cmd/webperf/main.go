@@ -10,7 +10,11 @@ import (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	os.Exit(runMain(context.Background(), os.Args[1:], app.Dependencies{}))
+}
+
+func runMain(parent context.Context, args []string, dependencies app.Dependencies) int {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(app.Run(ctx, os.Args[1:], app.Dependencies{}))
+	return app.Run(ctx, args, dependencies)
 }
