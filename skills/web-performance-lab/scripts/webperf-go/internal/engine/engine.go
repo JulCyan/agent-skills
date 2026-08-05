@@ -4,8 +4,6 @@ package engine
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,14 +102,18 @@ func (m Manager) Setup(ctx context.Context) (Status, error) {
 	if err != nil {
 		return NeedsSetup, err
 	}
+	cacheRoot := filepath.Dir(managedDirs[0])
 	target := managedDirs[len(managedDirs)-1]
-	if err := os.MkdirAll(filepath.Dir(managedDirs[0]), 0o700); err != nil {
-		return NeedsSetup, ErrCache
+	if err := ensureCacheRoot(cacheRoot); err != nil {
+		return NeedsSetup, err
 	}
 	for _, dir := range managedDirs[:len(managedDirs)-1] {
 		if err := ensureManagedDirectory(dir); err != nil {
-			return NeedsSetup, ErrCache
+			return NeedsSetup, err
 		}
+	}
+	if _, err := inspectManagedHierarchy(cacheRoot, managedDirs[:len(managedDirs)-1]); err != nil {
+		return NeedsSetup, ErrCache
 	}
 
 	if _, statErr := os.Lstat(target); statErr == nil {
@@ -148,7 +150,7 @@ func (m Manager) Setup(ctx context.Context) (Status, error) {
 	if err := commands.Run(
 		ctx,
 		"npm",
-		[]string{"ci", "--ignore-scripts", "--no-audit", "--no-fund"},
+		[]string{"ci", "--ignore-scripts", "--no-bin-links", "--no-audit", "--no-fund"},
 		staging,
 		executorEnvironment(os.Environ(), ""),
 		io.Discard,
@@ -159,7 +161,11 @@ func (m Manager) Setup(ctx context.Context) (Status, error) {
 		}
 		return NeedsSetup, ErrInstall
 	}
-	if err := writeAsset(filepath.Join(staging, installMarkerPath), installMarker()); err != nil {
+	payloadSnapshot, err := snapshotPayloadTree(staging)
+	if err != nil {
+		return NeedsSetup, ErrInstall
+	}
+	if err := writeInstallMarker(staging, payloadSnapshot.digest); err != nil {
 		return NeedsSetup, err
 	}
 	if _, err := m.runtimeForPayload(ctx, staging); err != nil {
@@ -177,8 +183,11 @@ func (m Manager) Setup(ctx context.Context) (Status, error) {
 		claim.rollback()
 		return NeedsSetup, fmt.Errorf("atomic engine install failed: %w", ErrInvalidTarget)
 	}
-	claim.releaseToken()
 	installed = true
+	claim.releaseToken()
+	if _, err := m.Runtime(ctx); err != nil {
+		return NeedsSetup, fmt.Errorf("installed engine failed final verification: %w", ErrNeedsSetup)
+	}
 	return Ready, nil
 }
 
@@ -190,11 +199,21 @@ func (m Manager) Runtime(ctx context.Context) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, err
 	}
-	if !managedDirectoriesValid(managedDirs) {
+	cacheRoot := filepath.Dir(managedDirs[0])
+	hierarchyBefore, err := inspectManagedHierarchy(cacheRoot, managedDirs)
+	if err != nil {
 		return Runtime{}, ErrNeedsSetup
 	}
 	target := managedDirs[len(managedDirs)-1]
-	return m.runtimeForPayload(ctx, filepath.Join(target, installPayloadDir))
+	runtime, err := m.runtimeForPayload(ctx, filepath.Join(target, installPayloadDir))
+	if err != nil {
+		return Runtime{}, err
+	}
+	hierarchyAfter, err := inspectManagedHierarchy(cacheRoot, managedDirs)
+	if err != nil || !sameManagedHierarchy(hierarchyBefore, hierarchyAfter) {
+		return Runtime{}, ErrNeedsSetup
+	}
+	return runtime, nil
 }
 
 func (m Manager) engineDir() (string, error) {
@@ -225,29 +244,6 @@ func (m Manager) managerOwnedDirs() ([]string, error) {
 	}, nil
 }
 
-func ensureManagedDirectory(path string) error {
-	if err := os.Mkdir(path, 0o700); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() {
-		return ErrCache
-	}
-	return nil
-}
-
-func managedDirectoriesValid(paths []string) bool {
-	for _, path := range paths {
-		info, err := os.Lstat(path)
-		if err != nil || !info.IsDir() {
-			return false
-		}
-	}
-	return true
-}
-
 type installClaim struct {
 	target     string
 	targetInfo os.FileInfo
@@ -260,7 +256,7 @@ func claimInstallTarget(target string) (installClaim, error) {
 		return installClaim{}, err
 	}
 	targetInfo, err := os.Lstat(target)
-	if err != nil || !targetInfo.IsDir() {
+	if err != nil || !trustedDirectory(targetInfo) {
 		return installClaim{}, ErrInvalidTarget
 	}
 	tokenPath := filepath.Join(target, installClaimToken)
@@ -271,7 +267,7 @@ func claimInstallTarget(target string) (installClaim, error) {
 	}
 	tokenInfo, statErr := token.Stat()
 	closeErr := token.Close()
-	if statErr != nil || closeErr != nil {
+	if statErr != nil || closeErr != nil || !trustedRegularFile(tokenInfo) {
 		if tokenInfo != nil {
 			installClaim{
 				target:     target,
@@ -349,47 +345,8 @@ type packageMetadata struct {
 	Version string `json:"version"`
 }
 
-func validatePayload(root string) (Runtime, error) {
-	managedPaths := []struct {
-		path string
-		dir  bool
-	}{
-		{path: root, dir: true},
-		{path: filepath.Join(root, "package.json")},
-		{path: filepath.Join(root, "package-lock.json")},
-		{path: filepath.Join(root, installMarkerPath)},
-		{path: filepath.Join(root, "node_modules"), dir: true},
-		{path: filepath.Join(root, "node_modules", "lighthouse"), dir: true},
-		{path: filepath.Join(root, "node_modules", "lighthouse", "package.json")},
-		{path: filepath.Join(root, "node_modules", "lighthouse", "cli"), dir: true},
-		{path: filepath.Join(root, lighthouseCLIPath)},
-	}
-	for _, managed := range managedPaths {
-		info, err := os.Lstat(managed.path)
-		if err != nil || managed.dir != info.IsDir() || (!managed.dir && !info.Mode().IsRegular()) {
-			return Runtime{}, ErrNeedsSetup
-		}
-	}
-	if !fileEquals(filepath.Join(root, "package.json"), npmPackageJSON) ||
-		!fileEquals(filepath.Join(root, "package-lock.json"), npmPackageLock) ||
-		!fileEquals(filepath.Join(root, installMarkerPath), installMarker()) {
-		return Runtime{}, ErrNeedsSetup
-	}
-	metadataPath := filepath.Join(root, "node_modules", "lighthouse", "package.json")
-	metadataBytes, err := os.ReadFile(metadataPath)
-	if err != nil {
-		return Runtime{}, ErrNeedsSetup
-	}
-	var metadata packageMetadata
-	if err := json.Unmarshal(metadataBytes, &metadata); err != nil || metadata.Version != lighthouseVersion {
-		return Runtime{}, ErrNeedsSetup
-	}
-	cliPath := filepath.Join(root, lighthouseCLIPath)
-	return Runtime{version: lighthouseVersion, cliPath: cliPath}, nil
-}
-
 func (m Manager) runtimeForPayload(ctx context.Context, root string) (Runtime, error) {
-	runtime, err := validatePayload(root)
+	before, err := validatePayload(root)
 	if err != nil {
 		return Runtime{}, err
 	}
@@ -417,6 +374,11 @@ func (m Manager) runtimeForPayload(ctx context.Context, root string) (Runtime, e
 	if err != nil || chromeRuntime.path == "" || chromeRuntime.version == "" {
 		return Runtime{}, ErrNeedsSetup
 	}
+	after, err := validatePayload(root)
+	if err != nil || !samePayloadValidation(before, after) {
+		return Runtime{}, ErrNeedsSetup
+	}
+	runtime := after.runtime
 	runtime.nodePath = nodePath
 	runtime.nodeVersion = normalizedNodeVersion(nodeVersion)
 	runtime.chromePath = chromeRuntime.path
@@ -564,22 +526,6 @@ func chromeCandidates(goos string) []string {
 	default:
 		return candidates
 	}
-}
-
-func installMarker() []byte {
-	manifestHash := sha256.Sum256(npmPackageJSON)
-	lockHash := sha256.Sum256(npmPackageLock)
-	return []byte(fmt.Sprintf(
-		"{\"schemaVersion\":1,\"lighthouseVersion\":%q,\"packageJSONSHA256\":%q,\"packageLockSHA256\":%q}\n",
-		lighthouseVersion,
-		fmt.Sprintf("%x", manifestHash),
-		fmt.Sprintf("%x", lockHash),
-	))
-}
-
-func fileEquals(path string, expected []byte) bool {
-	contents, err := os.ReadFile(path)
-	return err == nil && bytes.Equal(contents, expected)
 }
 
 func writeAsset(path string, contents []byte) error {

@@ -3,6 +3,8 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -54,7 +56,7 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 		if name != "npm" {
 			t.Fatalf("command=%q want=npm", name)
 		}
-		wantArgs := []string{"ci", "--ignore-scripts", "--no-audit", "--no-fund"}
+		wantArgs := []string{"ci", "--ignore-scripts", "--no-bin-links", "--no-audit", "--no-fund"}
 		if !reflect.DeepEqual(args, wantArgs) {
 			t.Fatalf("args=%v want=%v", args, wantArgs)
 		}
@@ -102,6 +104,62 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 		if strings.Contains(entry.Name(), ".staging-") {
 			t.Fatalf("staging directory was not cleaned: %q", entry.Name())
 		}
+	}
+	managedDirs, err := manager.managerOwnedDirs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range managedDirs {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("new manager directory %s mode=%#o want=0700", filepath.Base(path), info.Mode().Perm())
+		}
+	}
+	markerBytes, err := os.ReadFile(filepath.Join(target, installPayloadDir, installMarkerPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker map[string]any
+	if err := json.Unmarshal(markerBytes, &marker); err != nil {
+		t.Fatal(err)
+	}
+	digest, _ := marker["payloadSHA256"].(string)
+	if len(digest) != sha256.Size*2 {
+		t.Fatalf("payload digest length=%d want=%d", len(digest), sha256.Size*2)
+	}
+	payloadEntries, err := os.ReadDir(filepath.Join(target, installPayloadDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range payloadEntries {
+		if strings.HasPrefix(entry.Name(), ".webperf-engine-marker-") {
+			t.Fatalf("temporary marker survived publication: %q", entry.Name())
+		}
+	}
+}
+
+func TestSetupRejectsUnsafeCacheRootWithoutRunningNPM(t *testing.T) {
+	if !isUnix(runtime.GOOS) {
+		t.Skip("Unix permission bits are required")
+	}
+	commands := &recordingCommandRunner{}
+	manager := testManager(t, commands)
+	if err := os.Chmod(manager.cacheRoot, 0o777); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := manager.Setup(context.Background())
+	if !errors.Is(err, ErrCache) {
+		t.Fatalf("err=%v", err)
+	}
+	if status != NeedsSetup {
+		t.Fatalf("status=%q want=%q", status, NeedsSetup)
+	}
+	if len(commands.calls) != 0 {
+		t.Fatalf("npm calls=%d want=0", len(commands.calls))
 	}
 }
 
@@ -413,6 +471,153 @@ func TestRuntimeRejectsTamperedInstallCredentials(t *testing.T) {
 				t.Fatalf("err=%v", err)
 			}
 		})
+	}
+}
+
+func TestRuntimeRejectsTamperedPayloadDigestMarker(t *testing.T) {
+	manager := testManager(t, &recordingCommandRunner{})
+	target := manager.targetDir(t)
+	installFixture(t, target, lighthouseVersion)
+	markerPath := filepath.Join(target, installPayloadDir, installMarkerPath)
+	markerBytes, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker integrityMarker
+	if err := json.Unmarshal(markerBytes, &marker); err != nil {
+		t.Fatal(err)
+	}
+	marker.PayloadSHA256 = strings.Repeat("0", sha256.Size*2)
+	markerBytes, err = json.Marshal(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(markerPath, append(markerBytes, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = manager.Runtime(context.Background())
+	if !errors.Is(err, ErrNeedsSetup) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRuntimeRejectsTamperedInstalledPayload(t *testing.T) {
+	tests := []string{
+		lighthouseCLIPath,
+		"node_modules/dependency/index.js",
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			manager := testManager(t, &recordingCommandRunner{})
+			installFixture(t, manager.targetDir(t), lighthouseVersion)
+			path := filepath.Join(manager.targetDir(t), installPayloadDir, filepath.FromSlash(name))
+			if err := os.WriteFile(path, []byte("tampered\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := manager.Runtime(context.Background())
+			if !errors.Is(err, ErrNeedsSetup) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeRejectsGroupWritableCacheHierarchy(t *testing.T) {
+	if !isUnix(runtime.GOOS) {
+		t.Skip("Unix permission bits are required")
+	}
+	tests := []struct {
+		name string
+		path func(Manager) string
+	}{
+		{name: "cache root", path: func(manager Manager) string { return manager.cacheRoot }},
+		{name: "manager root", path: func(manager Manager) string { return filepath.Join(manager.cacheRoot, "webperf") }},
+		{name: "engine target", path: func(manager Manager) string { return manager.targetDir(t) }},
+		{name: "payload root", path: func(manager Manager) string { return filepath.Join(manager.targetDir(t), installPayloadDir) }},
+		{name: "node modules", path: func(manager Manager) string {
+			return filepath.Join(manager.targetDir(t), installPayloadDir, "node_modules")
+		}},
+		{name: "payload file", path: func(manager Manager) string {
+			return filepath.Join(manager.targetDir(t), installPayloadDir, "node_modules", "dependency", "index.js")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := testManager(t, &recordingCommandRunner{})
+			installFixture(t, manager.targetDir(t), lighthouseVersion)
+			if err := os.Chmod(tt.path(manager), 0o770); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := manager.Runtime(context.Background())
+			if !errors.Is(err, ErrNeedsSetup) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeAcceptsSafeReadOnlySharedCacheRoot(t *testing.T) {
+	if !isUnix(runtime.GOOS) {
+		t.Skip("Unix permission bits are required")
+	}
+	manager := testManager(t, &recordingCommandRunner{})
+	installFixture(t, manager.targetDir(t), lighthouseVersion)
+	if err := os.Chmod(manager.cacheRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := manager.Runtime(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRejectsSymlinkAnywhereInPayload(t *testing.T) {
+	manager := testManager(t, &recordingCommandRunner{})
+	target := manager.targetDir(t)
+	installFixture(t, target, lighthouseVersion)
+	dependency := filepath.Join(target, installPayloadDir, "node_modules", "dependency", "index.js")
+	backup := dependency + ".original"
+	if err := os.Rename(dependency, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(backup, dependency); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.Runtime(context.Background())
+	if !errors.Is(err, ErrNeedsSetup) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRuntimeRejectsPayloadReplacementDuringAssembly(t *testing.T) {
+	manager := testManager(t, &recordingCommandRunner{})
+	target := manager.targetDir(t)
+	installFixture(t, target, lighthouseVersion)
+	replacementTarget := filepath.Join(t.TempDir(), "replacement")
+	installFixture(t, replacementTarget, lighthouseVersion)
+	payload := filepath.Join(target, installPayloadDir)
+	replacementPayload := filepath.Join(replacementTarget, installPayloadDir)
+	backup := filepath.Join(filepath.Dir(payload), "old-payload")
+	manager.node = hookNodeResolver{
+		path:    "/test/bin/node-22.19",
+		version: "22.19.0",
+		hook: func() {
+			if err := os.Rename(payload, backup); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacementPayload, payload); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+
+	_, err := manager.Runtime(context.Background())
+	if !errors.Is(err, ErrNeedsSetup) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -1091,6 +1296,23 @@ type staticNodeResolver struct {
 	err     error
 }
 
+type hookNodeResolver struct {
+	path    string
+	version string
+	hook    func()
+}
+
+func (r hookNodeResolver) Resolve(context.Context) (string, error) {
+	if r.hook != nil {
+		r.hook()
+	}
+	return r.path, nil
+}
+
+func (r hookNodeResolver) Version(context.Context, string) (string, error) {
+	return r.version, nil
+}
+
 func (r staticNodeResolver) Resolve(context.Context) (string, error) {
 	return r.path, r.err
 }
@@ -1129,8 +1351,10 @@ func (m Manager) targetDir(t *testing.T) string {
 
 func installFixture(t *testing.T, root, version string) {
 	t.Helper()
-	installFixtureVersionOnly(t, root, version)
-	writeCLI(t, filepath.Join(root, installPayloadDir))
+	payload := filepath.Join(root, installPayloadDir)
+	writeManagedInstallFiles(t, payload)
+	installUnmanagedFixture(t, payload, version)
+	writeFixtureMarker(t, payload)
 }
 
 func installFixtureVersionOnly(t *testing.T, root, version string) {
@@ -1138,12 +1362,25 @@ func installFixtureVersionOnly(t *testing.T, root, version string) {
 	payload := filepath.Join(root, installPayloadDir)
 	writeManagedInstallFiles(t, payload)
 	installUnmanagedFixtureVersionOnly(t, payload, version)
+	writeFixtureMarker(t, payload)
 }
 
 func installUnmanagedFixture(t *testing.T, root, version string) {
 	t.Helper()
 	installUnmanagedFixtureVersionOnly(t, root, version)
 	writeCLI(t, root)
+	writeDependency(t, root)
+}
+
+func writeDependency(t *testing.T, root string) {
+	t.Helper()
+	dependency := filepath.Join(root, "node_modules", "dependency", "index.js")
+	if err := os.MkdirAll(filepath.Dir(dependency), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dependency, []byte("export const value = 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func installUnmanagedFixtureVersionOnly(t *testing.T, root, version string) {
@@ -1166,12 +1403,22 @@ func writeManagedInstallFiles(t *testing.T, root string) {
 	files := map[string][]byte{
 		"package.json":      npmPackageJSON,
 		"package-lock.json": npmPackageLock,
-		installMarkerPath:   installMarker(),
 	}
 	for name, contents := range files {
 		if err := os.WriteFile(filepath.Join(root, name), contents, 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func writeFixtureMarker(t *testing.T, root string) {
+	t.Helper()
+	snapshot, err := snapshotPayloadTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInstallMarker(root, snapshot.digest); err != nil {
+		t.Fatal(err)
 	}
 }
 
