@@ -19,12 +19,17 @@ When adding a Skill, also:
 - run the installed copy from a caller cwd outside the provider repository;
 - document optional dependencies, mutation authority, recovery, and lockfile
   ownership;
+- for measurement Skills, document run count, protocol compatibility,
+  dispersion, evidence handling, and the claims the tool cannot make;
 - use only synthetic fixtures and run the public scanner with the maintainer's
   private prohibited-term environment configured.
 
 Use synthetic fixtures. Do not include credentials, environment files, real
 store data, customer data, personal absolute paths, operational artifacts, or
 organization-specific identifiers.
+
+Performance fixtures use synthetic `example.test` targets. Real target URLs,
+raw browser reports, and collected evidence bundles stay outside Git.
 
 The public preview does not yet accept code contributions that require a
 license grant. Issues and design discussion remain welcome. Commit messages use

@@ -6,17 +6,21 @@ contains its own instructions, references, launcher, implementation, and tests.
 
 Status: **Public preview**
 
-## Available Skill
+## Available Skills
 
 - `shopify-media-sync` — plans, previews, executes, inspects, and safely
   recovers Shopify Files media synchronization.
+- `web-performance-lab` — collects, inspects, and compares repeatable
+  Lighthouse measurements for public web pages without assuming a framework or
+  commerce platform.
 
 ## Install
 
-Install the Skill into a project with the current Skills CLI:
+Install either Skill into a project with the current Skills CLI:
 
 ```bash
 npx skills add JulCyan/agent-skills --skill shopify-media-sync --copy
+npx skills add JulCyan/agent-skills --skill web-performance-lab --copy
 ```
 
 List the Skills exposed by the repository:
@@ -36,6 +40,8 @@ Skills rather than consuming them.
 
 ## Runtime
 
+### `shopify-media-sync`
+
 The installed Skill selects an executor in this order:
 
 1. an explicit trusted `SHOPIFY_MEDIA_SYNC_BINARY`;
@@ -48,6 +54,20 @@ binary, so systems without Go fail closed.
 Optional Lark/Feishu inputs require `lark-cli`; local CSV, XLSX, JSON, zip, and
 directory inputs do not.
 
+### `web-performance-lab`
+
+The POSIX wrapper uses Node.js 22.19 or newer. It runs an explicit trusted
+`WEBPERF_BINARY` when provided; otherwise it builds the bundled source with Go
+1.25.1 or newer in an executor-owned temporary directory. The locked
+Lighthouse runtime also requires npm and a supported local Chrome/Chromium.
+
+`engine setup` is the only engine installation command. It requires explicit
+authorization because it connects to the npm registry and writes a locked
+engine to the user's cache. Formal measurement uses five sequential runs,
+reports medians with dispersion, and compares only identical protocol
+fingerprints. Raw evidence can contain target details and must remain outside
+Git.
+
 ## Safety
 
 - Planning and preview do not write to Shopify.
@@ -55,6 +75,8 @@ directory inputs do not.
   by identity-matched `apply --execute`.
 - Credentials are read only from explicit supported configuration and are
   never printed.
+- Web performance collection accepts only public HTTP(S) targets, does not
+  mutate them, and does not claim field, RUM, or CrUX behavior.
 - The repository uses synthetic fixtures and scans for credentials, absolute
   personal paths, real-looking target IDs, and operator-supplied prohibited
   identifiers.
@@ -64,8 +86,7 @@ directory inputs do not.
 Requirements:
 
 - Node.js 22.20 or newer (required by the pinned Skills CLI acceptance suite)
-- the Go version declared in
-  `skills/shopify-media-sync/scripts/media-sync-go/go.mod`
+- Go 1.25.1 or newer, as declared by both bundled modules
 
 Run all checks:
 

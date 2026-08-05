@@ -6,8 +6,8 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
-  writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,40 +26,57 @@ async function doesNotExist(target) {
     await access(target);
     return false;
   } catch (error) {
-    if (error.code === 'ENOENT') {
-      return true;
-    }
+    if (error.code === 'ENOENT') return true;
     throw error;
   }
 }
 
-function scrubShopifyCredentials(environment) {
-  const scrubbed = { ...environment };
-  for (const key of [
-    'SHOPIFY_ACCESS_TOKEN',
-    'SHOPIFY_ADMIN_ACCESS_TOKEN',
-    'SHOPIFY_API_KEY',
-    'SHOPIFY_API_SECRET',
-    'SHOPIFY_CLIENT_ID',
-    'SHOPIFY_CLIENT_SECRET',
-    'SHOPIFY_STORE',
-  ]) {
-    delete scrubbed[key];
+async function runDoctor(wrapper, cwd, environment) {
+  try {
+    const result = await execFileAsync(wrapper, ['--json', 'doctor'], {
+      cwd,
+      env: environment,
+      maxBuffer: 1024 * 1024,
+    });
+    return { code: 0, ...result };
+  } catch (error) {
+    if (error.code !== 3) throw error;
+    return { code: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+}
+
+function webperfRuntimeEnvironment(environment) {
+  const scrubbed = { ...environment, NO_COLOR: '1', FORCE_COLOR: '0' };
+  for (const key of Object.keys(scrubbed)) {
+    if (key === 'WEBPERF_BINARY' || key.startsWith('WEBPERF_INTERNAL_')) {
+      delete scrubbed[key];
+    }
   }
   return scrubbed;
 }
 
+test('repository declares explicit validation entrypoints for both product CLIs', async () => {
+  const manifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
+  for (const script of [
+    'test:go:media-sync',
+    'test:go:webperf',
+    'test:shell:media-sync',
+    'test:shell:webperf',
+  ]) {
+    assert.equal(typeof manifest.scripts[script], 'string', `${script} must be declared`);
+  }
+});
+
 test(
-  'tracked snapshot installs both self-contained Skills into a disposable sandbox',
+  'tracked snapshot copy-installs webperf and runs read-only commands outside the provider',
   { timeout: 120_000 },
   async (t) => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'agent-skills-sandbox-install-'));
+    const root = await mkdtemp(path.join(os.tmpdir(), 'webperf-install-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     const archivePath = path.join(root, 'provider.tar');
     const providerExport = path.join(root, 'provider-export');
     const consumer = path.join(root, 'consumer');
     const caller = path.join(root, 'caller');
-    const cache = path.join(root, 'cache');
     await mkdir(providerExport);
     await mkdir(consumer);
     await mkdir(caller);
@@ -104,19 +121,6 @@ test(
     assert.match(installOutput, /Installed 2 skills\b/);
     assert.match(installOutput, /\bshopify-media-sync\b/);
     assert.match(installOutput, /\bweb-performance-lab\b/);
-
-    const lock = JSON.parse(await readFile(path.join(consumer, 'skills-lock.json'), 'utf8'));
-    const entry = lock.skills['shopify-media-sync'];
-    assert.equal(lock.version, 1);
-    assert.equal(entry.sourceType, 'local');
-    assert.match(entry.computedHash, /^[a-f0-9]{64}$/);
-    assert.equal(
-      (await verifyInstalledSkill({
-        projectRoot: consumer,
-        skillName: 'shopify-media-sync',
-      })).status,
-      'MATCH',
-    );
     assert.equal(
       (await verifyInstalledSkill({
         projectRoot: consumer,
@@ -129,77 +133,42 @@ test(
       consumer,
       '.agents',
       'skills',
-      'shopify-media-sync',
+      'web-performance-lab',
       'scripts',
-      'shopify-media-sync.sh',
+      'webperf',
     );
-    const runtimeEnvironment = scrubShopifyCredentials({
-      ...process.env,
-      SHOPIFY_MEDIA_SYNC_CACHE_DIR: cache,
-    });
+    const runtimeEnvironment = webperfRuntimeEnvironment(process.env);
     const { stdout: helpOutput } = await execFileAsync(wrapper, ['--help'], {
       cwd: caller,
       env: runtimeEnvironment,
       maxBuffer: 1024 * 1024,
     });
-    assert.match(helpOutput, /shopify-media-sync plans Shopify Files/);
+    assert.match(helpOutput, /webperf measures public web performance/);
 
-    const { stdout: doctorOutput } = await execFileAsync(wrapper, ['--json', 'doctor'], {
-      cwd: caller,
-      env: runtimeEnvironment,
-      maxBuffer: 1024 * 1024,
-    });
-    const report = JSON.parse(doctorOutput);
-    assert.equal(report.command, 'doctor');
-    assert.equal(report.capabilities.local_input.available, true);
+    const doctorResult = await runDoctor(wrapper, caller, runtimeEnvironment);
+    assert.ok([0, 3].includes(doctorResult.code));
+    const doctor = JSON.parse(doctorResult.stdout);
+    assert.equal(doctor.schemaVersion, 1);
+    assert.equal(doctor.command, 'doctor');
+    assert.equal(doctor.status, doctorResult.code === 0 ? 'OK' : 'NEEDS_SETUP');
+    assert.equal(typeof doctor.data.goVersion, 'string');
+    assert.equal(typeof doctor.data.os, 'string');
+    assert.equal(typeof doctor.data.arch, 'string');
+    assert.ok(['OK', 'NEEDS_SETUP'].includes(doctor.data.engineStatus));
 
-    await mkdir(path.join(caller, 'images'));
-    await writeFile(
-      path.join(caller, 'stores.config.json'),
-      `${JSON.stringify({
-        stores: [
-          {
-            id: 'store-demo',
-            label: 'Demo',
-            shopifyStore: 'store-demo',
-            primaryLocale: 'en',
-            enabled: true,
-          },
-        ],
-      })}\n`,
-    );
-    await writeFile(
-      path.join(caller, 'media.csv'),
-      '序号,source图片名,target图片文件名,en\n1,asset.svg,asset.svg,Synthetic alt\n',
-    );
-    await writeFile(
-      path.join(caller, 'images', 'asset.svg'),
-      '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"></svg>\n',
-    );
-
-    await execFileAsync(
+    const { stdout: profilesOutput } = await execFileAsync(
       wrapper,
-      [
-        'plan',
-        '--input',
-        'media.csv',
-        '--source-root',
-        'images',
-        '--stores',
-        'all',
-        '--out-dir',
-        'run',
-      ],
+      ['--json', 'profiles', 'list'],
       { cwd: caller, env: runtimeEnvironment, maxBuffer: 1024 * 1024 },
     );
-    const { stdout: inspectOutput } = await execFileAsync(
-      wrapper,
-      ['inspect', '--plan', 'run/plan.json', '--format', 'json'],
-      { cwd: caller, env: runtimeEnvironment, maxBuffer: 1024 * 1024 },
+    const profiles = JSON.parse(profilesOutput);
+    assert.equal(profiles.schemaVersion, 1);
+    assert.equal(profiles.command, 'profiles list');
+    assert.equal(profiles.status, 'OK');
+    assert.deepEqual(
+      profiles.data.map((profile) => profile.name),
+      ['desktop-observed-v1', 'desktop-lab-v1', 'mobile-lab-v1'],
     );
-    const inspection = JSON.parse(inspectOutput);
-    assert.equal(inspection.run_id.length > 0, true);
-    assert.match(inspection.plan_path, /run\/plan\.json$/);
-    assert.match(inspection.plan_sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(await readdir(caller), []);
   },
 );
