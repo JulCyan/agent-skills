@@ -61,11 +61,11 @@ Managed commands 输出：
 
 | Status | Scope | 含义 | Exit |
 | --- | --- | --- | ---: |
-| `OK` | envelope / attempt | 命令、分析或 attempt 成功；compare verdict 仍在 `data.overall` | 0 |
+| `OK` | envelope / summary / attempt | 命令、分析或 attempt 成功；compare verdict 仍在 `data.overall` | 0 |
 | `INVALID_INPUT` | envelope | 命令、flag、profile、URL 或目录参数无效 | 2 |
 | `NEEDS_SETUP` | envelope | locked engine、Node、Chrome 或安装条件未就绪 | 3；launcher 缺 Go 为 2 |
 | `INTERRUPTED` | envelope / attempt | 收到取消或超时 | 130（attempt 无独立 exit） |
-| `PARTIAL` | envelope / summary | 至少一个 collect attempt 未完整成功；不可比较 | 1 |
+| `PARTIAL` | envelope / summary / attempt | 至少一个 collect attempt 未完整成功；不可比较 | 1（attempt 无独立 exit） |
 | `INCONCLUSIVE` | envelope | aggregate 缺失、bundle 不完整或证据无效 | 1 |
 | `INCOMPATIBLE_PROTOCOL` | envelope | profile/runtime fingerprint 不一致 | 1 |
 | `ENGINE_FAILED` | envelope / attempt | fatal collection failure，或单次 Lighthouse/browser attempt 失败 | 1（attempt 无独立 exit） |
