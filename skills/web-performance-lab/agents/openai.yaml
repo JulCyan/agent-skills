@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web Performance Lab"
+  short_description: "Repeatable Lighthouse measurement and comparison"
+  default_prompt: "Use $web-performance-lab to measure a public page across repeatable Lighthouse runs and report protocol-safe results."
