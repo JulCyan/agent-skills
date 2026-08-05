@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import {
   access,
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,8 +47,19 @@ async function runDoctor(wrapper, cwd, environment) {
   }
 }
 
-function webperfRuntimeEnvironment(environment) {
-  const scrubbed = { ...environment, NO_COLOR: '1', FORCE_COLOR: '0' };
+function webperfRuntimeEnvironment(
+  environment,
+  { home, npmSentinel, runtimeBin, xdgCache },
+) {
+  const scrubbed = {
+    ...environment,
+    FORCE_COLOR: '0',
+    HOME: home,
+    NO_COLOR: '1',
+    PATH: `${runtimeBin}${path.delimiter}${environment.PATH ?? ''}`,
+    WEBPERF_NPM_TRAP_SENTINEL: npmSentinel,
+    XDG_CACHE_HOME: xdgCache,
+  };
   for (const key of Object.keys(scrubbed)) {
     if (key === 'WEBPERF_BINARY' || key.startsWith('WEBPERF_INTERNAL_')) {
       delete scrubbed[key];
@@ -57,14 +70,27 @@ function webperfRuntimeEnvironment(environment) {
 
 test('repository declares explicit validation entrypoints for both product CLIs', async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
-  for (const script of [
-    'test:go:media-sync',
-    'test:go:webperf',
-    'test:shell:media-sync',
-    'test:shell:webperf',
-  ]) {
-    assert.equal(typeof manifest.scripts[script], 'string', `${script} must be declared`);
-  }
+  assert.deepEqual(
+    {
+      'test:go:media-sync': manifest.scripts['test:go:media-sync'],
+      'test:go:webperf': manifest.scripts['test:go:webperf'],
+      'test:shell:media-sync': manifest.scripts['test:shell:media-sync'],
+      'test:shell:webperf': manifest.scripts['test:shell:webperf'],
+      'test:go': manifest.scripts['test:go'],
+      'test:shell': manifest.scripts['test:shell'],
+    },
+    {
+      'test:go:media-sync':
+        'cd skills/shopify-media-sync/scripts/media-sync-go && go test ./...',
+      'test:go:webperf':
+        'cd skills/web-performance-lab/scripts/webperf-go && go test ./...',
+      'test:shell:media-sync':
+        'sh -n skills/shopify-media-sync/scripts/shopify-media-sync.sh',
+      'test:shell:webperf': 'sh -n skills/web-performance-lab/scripts/webperf',
+      'test:go': 'npm run test:go:media-sync && npm run test:go:webperf',
+      'test:shell': 'npm run test:shell:media-sync && npm run test:shell:webperf',
+    },
+  );
 });
 
 test(
@@ -77,9 +103,22 @@ test(
     const providerExport = path.join(root, 'provider-export');
     const consumer = path.join(root, 'consumer');
     const caller = path.join(root, 'caller');
+    const isolatedHome = path.join(root, 'runtime-home');
+    const isolatedXDGCache = path.join(root, 'runtime-xdg-cache');
+    const runtimeBin = path.join(root, 'runtime-bin');
+    const npmSentinel = path.join(root, 'npm-invoked');
     await mkdir(providerExport);
     await mkdir(consumer);
     await mkdir(caller);
+    await mkdir(isolatedHome);
+    await mkdir(isolatedXDGCache);
+    await mkdir(runtimeBin);
+    const npmTrap = path.join(runtimeBin, 'npm');
+    await writeFile(
+      npmTrap,
+      '#!/bin/sh\nprintf invoked > "$WEBPERF_NPM_TRAP_SENTINEL"\nexit 97\n',
+    );
+    await chmod(npmTrap, 0o700);
 
     const { stdout: indexPathOutput } = await execFileAsync(
       'git',
@@ -137,7 +176,14 @@ test(
       'scripts',
       'webperf',
     );
-    const runtimeEnvironment = webperfRuntimeEnvironment(process.env);
+    const runtimeEnvironment = webperfRuntimeEnvironment(process.env, {
+      home: isolatedHome,
+      npmSentinel,
+      runtimeBin,
+      xdgCache: isolatedXDGCache,
+    });
+    assert.equal(runtimeEnvironment.HOME, isolatedHome);
+    assert.equal(runtimeEnvironment.XDG_CACHE_HOME, isolatedXDGCache);
     const { stdout: helpOutput } = await execFileAsync(wrapper, ['--help'], {
       cwd: caller,
       env: runtimeEnvironment,
@@ -146,15 +192,15 @@ test(
     assert.match(helpOutput, /webperf measures public web performance/);
 
     const doctorResult = await runDoctor(wrapper, caller, runtimeEnvironment);
-    assert.ok([0, 3].includes(doctorResult.code));
+    assert.equal(doctorResult.code, 3);
     const doctor = JSON.parse(doctorResult.stdout);
     assert.equal(doctor.schemaVersion, 1);
     assert.equal(doctor.command, 'doctor');
-    assert.equal(doctor.status, doctorResult.code === 0 ? 'OK' : 'NEEDS_SETUP');
+    assert.equal(doctor.status, 'NEEDS_SETUP');
     assert.equal(typeof doctor.data.goVersion, 'string');
     assert.equal(typeof doctor.data.os, 'string');
     assert.equal(typeof doctor.data.arch, 'string');
-    assert.ok(['OK', 'NEEDS_SETUP'].includes(doctor.data.engineStatus));
+    assert.equal(doctor.data.engineStatus, 'NEEDS_SETUP');
 
     const { stdout: profilesOutput } = await execFileAsync(
       wrapper,
@@ -170,5 +216,11 @@ test(
       ['desktop-observed-v1', 'desktop-lab-v1', 'mobile-lab-v1'],
     );
     assert.deepEqual(await readdir(caller), []);
+    assert.equal(await doesNotExist(npmSentinel), true);
+    assert.equal(
+      await doesNotExist(path.join(isolatedHome, 'Library', 'Caches', 'webperf')),
+      true,
+    );
+    assert.equal(await doesNotExist(path.join(isolatedXDGCache, 'webperf')), true);
   },
 );

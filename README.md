@@ -75,7 +75,7 @@ Git.
   by identity-matched `apply --execute`.
 - Credentials are read only from explicit supported configuration and are
   never printed.
-- Web performance collection accepts only public HTTP(S) targets, does not
+- Web performance collection is intended for public HTTP(S) targets, does not
   mutate them, and does not claim field, RUM, or CrUX behavior.
 - The repository uses synthetic fixtures and scans for credentials, absolute
   personal paths, real-looking target IDs, and operator-supplied prohibited
