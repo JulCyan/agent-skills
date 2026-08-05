@@ -4,13 +4,18 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 
+	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/bundle"
+	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/collect"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/contract"
+	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/engine"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/profile"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/safeurl"
 )
@@ -18,6 +23,13 @@ import (
 type Dependencies struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	Engine engineManager
+}
+
+type engineManager interface {
+	Status(context.Context) engine.Status
+	Setup(context.Context) (engine.Status, error)
+	Runtime(context.Context) (engine.Runtime, error)
 }
 
 func Run(ctx context.Context, args []string, deps Dependencies) int {
@@ -28,7 +40,7 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 		return render(stdout, stderr, jsonOutput, failure("", contract.Interrupted, "interrupted", "command interrupted", "run the command again", contract.ErrInterrupted))
 	}
 
-	report, showHelp := dispatch(args, stderr)
+	report, showHelp := dispatch(ctx, args, stderr, deps)
 	if showHelp {
 		if jsonOutput {
 			return render(stdout, stderr, true, success("help", helpData{Commands: commands(), AvailableProfiles: profile.List()}))
@@ -39,7 +51,7 @@ func Run(ctx context.Context, args []string, deps Dependencies) int {
 	return render(stdout, stderr, jsonOutput, report)
 }
 
-func dispatch(args []string, stderr io.Writer) (contract.Envelope, bool) {
+func dispatch(ctx context.Context, args []string, stderr io.Writer, deps Dependencies) (contract.Envelope, bool) {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		return contract.Envelope{}, true
 	}
@@ -49,16 +61,16 @@ func dispatch(args []string, stderr io.Writer) (contract.Envelope, bool) {
 		if len(args) != 1 {
 			return invalid("doctor", "unexpected_argument", "doctor does not accept arguments"), false
 		}
-		return unavailable("doctor"), false
+		return doctor(ctx, manager(deps)), false
 	case "profiles":
 		if len(args) == 2 && args[1] == "list" {
 			return success("profiles list", profile.List()), false
 		}
 		return invalid("profiles", "invalid_profiles_command", "expected profiles list"), false
 	case "engine":
-		return engine(args)
+		return engineCommand(ctx, args, manager(deps))
 	case "collect":
-		return collect(args[1:], stderr), false
+		return collectCommand(ctx, args[1:], stderr, manager(deps)), false
 	case "inspect":
 		return inspect(args[1:], stderr), false
 	case "compare":
@@ -70,14 +82,55 @@ func dispatch(args []string, stderr io.Writer) (contract.Envelope, bool) {
 	}
 }
 
-func engine(args []string) (contract.Envelope, bool) {
+func manager(deps Dependencies) engineManager {
+	if deps.Engine != nil {
+		return deps.Engine
+	}
+	return engine.Manager{}
+}
+
+func doctor(ctx context.Context, manager engineManager) contract.Envelope {
+	data := doctorData{GoVersion: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH}
+	runtimeInfo, err := manager.Runtime(ctx)
+	if ctx.Err() != nil {
+		return interrupted("doctor")
+	}
+	if err != nil {
+		data.EngineStatus = engine.NeedsSetup
+		return needsSetupWithData("doctor", data)
+	}
+	data.EngineStatus = engine.Ready
+	data.LighthouseVersion = runtimeInfo.Version()
+	data.NodeVersion = runtimeInfo.NodeVersion()
+	data.ChromeVersion = runtimeInfo.ChromeVersion()
+	return success("doctor", data)
+}
+
+func engineCommand(ctx context.Context, args []string, manager engineManager) (contract.Envelope, bool) {
 	if len(args) != 2 || (args[1] != "status" && args[1] != "setup") {
 		return invalid("engine", "invalid_engine_command", "expected engine status or engine setup"), false
 	}
-	return unavailable("engine " + args[1]), false
+	if args[1] == "status" {
+		status := manager.Status(ctx)
+		if ctx.Err() != nil {
+			return interrupted("engine status"), false
+		}
+		if status != engine.Ready {
+			return needsSetupWithData("engine status", engineStatusData{Status: status}), false
+		}
+		return success("engine status", engineStatusData{Status: status}), false
+	}
+	status, err := manager.Setup(ctx)
+	if ctx.Err() != nil {
+		return interrupted("engine setup"), false
+	}
+	if err != nil || status != engine.Ready {
+		return needsSetupWithData("engine setup", engineStatusData{Status: status}), false
+	}
+	return success("engine setup", engineStatusData{Status: status}), false
 }
 
-func collect(args []string, stderr io.Writer) contract.Envelope {
+func collectCommand(ctx context.Context, args []string, stderr io.Writer, manager engineManager) contract.Envelope {
 	flags := flag.NewFlagSet("collect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	urlValue := flags.String("url", "", "public http or https url")
@@ -93,10 +146,12 @@ func collect(args []string, stderr io.Writer) contract.Envelope {
 	if *profileName == "" {
 		return profileRequired()
 	}
-	if _, err := profile.Resolve(*profileName); err != nil {
+	resolvedProfile, err := profile.Resolve(*profileName)
+	if err != nil {
 		return invalid("collect", "unknown_profile", "collect profile is not supported")
 	}
-	if _, err := safeurl.Validate(*urlValue); err != nil {
+	parsedURL, err := safeurl.Validate(*urlValue)
+	if err != nil {
 		return invalid("collect", "invalid_url", "collect requires a public http or https url")
 	}
 	if *out == "" {
@@ -105,7 +160,78 @@ func collect(args []string, stderr io.Writer) contract.Envelope {
 	if *runs < 3 {
 		return invalid("collect", "runs_too_low", "collect requires at least three runs")
 	}
-	return unavailable("collect")
+	runtimeInfo, err := manager.Runtime(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return failure("collect", contract.Interrupted, "interrupted", "command interrupted", "run the command again", contract.ErrInterrupted)
+		}
+		return unavailable("collect")
+	}
+	request := collect.Request{
+		URL:        parsedURL.String(),
+		DisplayURL: safeurl.Display(parsedURL),
+		Profile:    resolvedProfile,
+		Runs:       *runs,
+		Out:        *out,
+		Protocol:   protocolFor(resolvedProfile, runtimeInfo),
+	}
+	summary, err := (collect.Service{Runner: engine.NewRunner(runtimeInfo)}).Run(ctx, request)
+	if err != nil {
+		return collectionFailure(summary, err)
+	}
+	return contract.Envelope{
+		SchemaVersion: contract.SchemaVersion,
+		Command:       "collect",
+		Status:        contract.OK,
+		Data:          summary,
+		Warnings:      summary.Warnings,
+	}
+}
+
+func protocolFor(resolved profile.Profile, runtimeInfo engine.Runtime) bundle.Protocol {
+	return bundle.CompleteProtocol(bundle.Protocol{
+		SchemaVersion:     1,
+		Profile:           resolved.Name,
+		FormFactor:        resolved.FormFactor,
+		ThrottlingMethod:  resolved.ThrottlingMethod,
+		ResolvedFlags:     append([]string(nil), resolved.LighthouseArgs...),
+		RuntimeFlags:      []string{"--only-categories=performance", "--output=json", "--quiet", "--no-enable-error-reporting", "--chrome-path=resolved-by-webperf", "fresh-user-data-dir-per-attempt"},
+		LighthouseVersion: runtimeInfo.Version(),
+		NodeVersion:       runtimeInfo.NodeVersion(),
+		ChromeVersion:     runtimeInfo.ChromeVersion(),
+		OS:                runtimeInfo.OS(),
+		Arch:              runtimeInfo.Arch(),
+	})
+}
+
+func collectionFailure(summary bundle.Summary, err error) contract.Envelope {
+	status := contract.EngineFailed
+	code := "collection_failed"
+	message := "collection failed"
+	remediation := "inspect the retained evidence and run a new collection"
+	switch {
+	case errors.Is(err, collect.ErrIncomplete):
+		status = contract.Partial
+		code = "incomplete_samples"
+		message = "fewer than three samples succeeded"
+	case errors.Is(err, collect.ErrPartial):
+		status = contract.Partial
+		code = "partial_attempts"
+		message = "one or more attempts did not complete cleanly"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		status = contract.Interrupted
+		code = "interrupted"
+		message = "collection interrupted"
+		remediation = "inspect the retained evidence and run a new collection"
+	}
+	return contract.Envelope{
+		SchemaVersion: contract.SchemaVersion,
+		Command:       "collect",
+		Status:        status,
+		Data:          summary,
+		Warnings:      summary.Warnings,
+		Error:         contract.NewCommandError(code, message, remediation, err),
+	}
 }
 
 func inspect(args []string, stderr io.Writer) contract.Envelope {
@@ -151,7 +277,17 @@ func invalid(command, code, message string) contract.Envelope {
 }
 
 func unavailable(command string) contract.Envelope {
-	return failure(command, contract.NeedsSetup, "command_unavailable", "command is not available yet", "complete engine setup before using this command", contract.ErrNeedsSetup)
+	return failure(command, contract.NeedsSetup, "engine_needs_setup", "locked Lighthouse engine needs setup", "run webperf engine setup before using this command", contract.ErrNeedsSetup)
+}
+
+func needsSetupWithData(command string, data any) contract.Envelope {
+	report := unavailable(command)
+	report.Data = data
+	return report
+}
+
+func interrupted(command string) contract.Envelope {
+	return failure(command, contract.Interrupted, "interrupted", "command interrupted", "run the command again", contract.ErrInterrupted)
 }
 
 func profileRequired() contract.Envelope {
@@ -172,6 +308,15 @@ func failure(command string, status contract.Status, code, message, remediation 
 func render(stdout, stderr io.Writer, jsonOutput bool, report contract.Envelope) int {
 	if jsonOutput {
 		_ = json.NewEncoder(stdout).Encode(report)
+	} else if report.Command == "collect" {
+		if summary, ok := report.Data.(bundle.Summary); ok {
+			renderHumanCollect(stdout, summary)
+		} else if report.Error == nil {
+			_, _ = fmt.Fprintf(stdout, "%s: %s\n", report.Command, report.Status)
+		}
+		if report.Error != nil {
+			_, _ = fmt.Fprintf(stderr, "webperf: %s\n", report.Error.Message)
+		}
 	} else if report.Error == nil {
 		if profiles, ok := report.Data.([]profile.Profile); ok && report.Command == "profiles list" {
 			for _, item := range profiles {
@@ -187,6 +332,45 @@ func render(stdout, stderr io.Writer, jsonOutput bool, report contract.Envelope)
 		_, _ = fmt.Fprintf(stderr, "webperf: %s\n", report.Error.Message)
 	}
 	return contract.ExitCode(report.Status)
+}
+
+func renderHumanCollect(stdout io.Writer, summary bundle.Summary) {
+	if summary.SchemaVersion == 0 {
+		return
+	}
+	if summary.Profile != "" {
+		_, _ = fmt.Fprintf(stdout, "profile: %s\n", summary.Profile)
+	}
+	if summary.RequestedRuns > 0 || summary.SuccessfulRuns > 0 {
+		_, _ = fmt.Fprintf(stdout, "samples: %d/%d\n", summary.SuccessfulRuns, summary.RequestedRuns)
+	}
+	if summary.FinalURL != "" {
+		_, _ = fmt.Fprintf(stdout, "final URL: %s\n", summary.FinalURL)
+	}
+	if summary.Metrics.PerformanceScore.Count < 3 || summary.Metrics.LCP.Count < 3 {
+		_, _ = fmt.Fprintln(stdout, "aggregate: unavailable")
+		for _, warning := range summary.Warnings {
+			_, _ = fmt.Fprintf(stdout, "warning: %s\n", warning)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(
+		stdout,
+		"official performance score: median=%g mad=%g iqr=%g\n",
+		summary.Metrics.PerformanceScore.Median,
+		summary.Metrics.PerformanceScore.MAD,
+		summary.Metrics.PerformanceScore.IQR,
+	)
+	_, _ = fmt.Fprintf(
+		stdout,
+		"LCP: median=%g mad=%g iqr=%g\n",
+		summary.Metrics.LCP.Median,
+		summary.Metrics.LCP.MAD,
+		summary.Metrics.LCP.IQR,
+	)
+	for _, warning := range summary.Warnings {
+		_, _ = fmt.Fprintf(stdout, "warning: %s\n", warning)
+	}
 }
 
 func splitGlobalFlags(args []string) (bool, []string) {
@@ -221,6 +405,20 @@ type helpData struct {
 
 type availableProfilesData struct {
 	AvailableProfiles []profile.Profile `json:"availableProfiles"`
+}
+
+type doctorData struct {
+	GoVersion         string        `json:"goVersion"`
+	OS                string        `json:"os"`
+	Arch              string        `json:"arch"`
+	EngineStatus      engine.Status `json:"engineStatus,omitempty"`
+	LighthouseVersion string        `json:"lighthouseVersion,omitempty"`
+	NodeVersion       string        `json:"nodeVersion,omitempty"`
+	ChromeVersion     string        `json:"chromeVersion,omitempty"`
+}
+
+type engineStatusData struct {
+	Status engine.Status `json:"status"`
 }
 
 func helpText() string {

@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -51,12 +53,27 @@ type nodeResolver interface {
 	Resolve(context.Context) (string, error)
 }
 
+type nodeMetadataResolver interface {
+	nodeResolver
+	Version(context.Context, string) (string, error)
+}
+
+type chromeResolver interface {
+	Resolve(context.Context) (chromeRuntime, error)
+}
+
+type chromeRuntime struct {
+	path    string
+	version string
+}
+
 // Manager owns the locked Lighthouse cache lifecycle.
 // Its zero value uses os.UserCacheDir and the production command runner.
 type Manager struct {
 	cacheRoot string
 	commands  commandRunner
 	node      nodeResolver
+	chrome    chromeResolver
 	rename    func(string, string) error
 }
 
@@ -295,9 +312,12 @@ func removeOwnedEmptyTarget(target string, targetInfo os.FileInfo) {
 }
 
 type Runtime struct {
-	version  string
-	cliPath  string
-	nodePath string
+	version       string
+	cliPath       string
+	nodePath      string
+	nodeVersion   string
+	chromePath    string
+	chromeVersion string
 }
 
 func (r Runtime) Version() string { return r.version }
@@ -305,6 +325,16 @@ func (r Runtime) Version() string { return r.version }
 func (r Runtime) CLIPath() string { return r.cliPath }
 
 func (r Runtime) NodePath() string { return r.nodePath }
+
+func (r Runtime) NodeVersion() string { return r.nodeVersion }
+
+func (r Runtime) ChromePath() string { return r.chromePath }
+
+func (r Runtime) ChromeVersion() string { return r.chromeVersion }
+
+func (r Runtime) OS() string { return runtime.GOOS }
+
+func (r Runtime) Arch() string { return runtime.GOARCH }
 
 type packageMetadata struct {
 	Version string `json:"version"`
@@ -362,7 +392,26 @@ func (m Manager) runtimeForPayload(ctx context.Context, root string) (Runtime, e
 	if err != nil {
 		return Runtime{}, ErrNeedsSetup
 	}
+	metadataResolver, ok := resolver.(nodeMetadataResolver)
+	if !ok {
+		return Runtime{}, ErrNeedsSetup
+	}
+	nodeVersion, err := metadataResolver.Version(ctx, nodePath)
+	if err != nil || !supportedNodeVersion(nodeVersion) {
+		return Runtime{}, ErrNeedsSetup
+	}
+	chrome := m.chrome
+	if chrome == nil {
+		chrome = systemChromeResolver{commands: m.commands}
+	}
+	chromeRuntime, err := chrome.Resolve(ctx)
+	if err != nil || chromeRuntime.path == "" || chromeRuntime.version == "" {
+		return Runtime{}, ErrNeedsSetup
+	}
 	runtime.nodePath = nodePath
+	runtime.nodeVersion = normalizedNodeVersion(nodeVersion)
+	runtime.chromePath = chromeRuntime.path
+	runtime.chromeVersion = chromeRuntime.version
 	return runtime, nil
 }
 
@@ -384,6 +433,14 @@ func (r systemNodeResolver) Resolve(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", ErrNeedsSetup
 	}
+	version, err := r.Version(ctx, nodePath)
+	if err != nil || !supportedNodeVersion(version) {
+		return "", ErrNeedsSetup
+	}
+	return nodePath, nil
+}
+
+func (r systemNodeResolver) Version(ctx context.Context, nodePath string) (string, error) {
 	commands := r.commands
 	if commands == nil {
 		commands = execCommandRunner{terminationGrace: defaultGrace}
@@ -392,14 +449,15 @@ func (r systemNodeResolver) Resolve(ctx context.Context) (string, error) {
 	if err := commands.Run(ctx, nodePath, []string{"--version"}, "", &stdout, io.Discard); err != nil {
 		return "", ErrNeedsSetup
 	}
-	if !supportedNodeVersion(stdout.String()) {
+	version := normalizedNodeVersion(stdout.String())
+	if !supportedNodeVersion(version) {
 		return "", ErrNeedsSetup
 	}
-	return nodePath, nil
+	return version, nil
 }
 
 func supportedNodeVersion(output string) bool {
-	version := strings.TrimPrefix(strings.TrimSpace(output), "v")
+	version := normalizedNodeVersion(output)
 	parts := strings.Split(version, ".")
 	if len(parts) < 2 {
 		return false
@@ -410,6 +468,88 @@ func supportedNodeVersion(output string) bool {
 		return false
 	}
 	return major > 22 || (major == 22 && minor >= 19)
+}
+
+func normalizedNodeVersion(output string) string {
+	return strings.TrimPrefix(strings.TrimSpace(output), "v")
+}
+
+type systemChromeResolver struct {
+	lookPath func(string) (string, error)
+	stat     func(string) (os.FileInfo, error)
+	commands commandRunner
+	goos     string
+}
+
+var chromeVersionPattern = regexp.MustCompile(`\d+(?:\.\d+){2,}`)
+
+func (r systemChromeResolver) Resolve(ctx context.Context) (chromeRuntime, error) {
+	lookup := r.lookPath
+	if lookup == nil {
+		lookup = exec.LookPath
+	}
+	stat := r.stat
+	if stat == nil {
+		stat = os.Stat
+	}
+	goos := r.goos
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	candidates := chromeCandidates(goos)
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		resolved := candidate
+		if !filepath.IsAbs(candidate) {
+			path, err := lookup(candidate)
+			if err != nil {
+				continue
+			}
+			resolved = path
+		} else if info, err := stat(candidate); err != nil || info.IsDir() {
+			continue
+		}
+		if _, ok := seen[resolved]; ok {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		version, err := r.version(ctx, resolved)
+		if err == nil {
+			return chromeRuntime{path: resolved, version: version}, nil
+		}
+	}
+	return chromeRuntime{}, ErrNeedsSetup
+}
+
+func (r systemChromeResolver) version(ctx context.Context, chromePath string) (string, error) {
+	commands := r.commands
+	if commands == nil {
+		commands = execCommandRunner{terminationGrace: defaultGrace}
+	}
+	var stdout bytes.Buffer
+	if err := commands.Run(ctx, chromePath, []string{"--version"}, "", &stdout, io.Discard); err != nil {
+		return "", ErrNeedsSetup
+	}
+	version := chromeVersionPattern.FindString(stdout.String())
+	if version == "" {
+		return "", ErrNeedsSetup
+	}
+	return version, nil
+}
+
+func chromeCandidates(goos string) []string {
+	candidates := []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "Google Chrome"}
+	switch goos {
+	case "darwin":
+		return append(candidates,
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		)
+	case "windows":
+		return append(candidates, "chrome.exe")
+	default:
+		return candidates
+	}
 }
 
 func installMarker() []byte {
@@ -462,12 +602,13 @@ func newRunner(runtime Runtime, commands commandRunner) Runner {
 }
 
 func (r Runner) Run(ctx context.Context, request Request) Result {
-	if r.runtime.version != lighthouseVersion || r.runtime.cliPath == "" || r.runtime.nodePath == "" {
+	if r.runtime.version != lighthouseVersion || r.runtime.cliPath == "" || r.runtime.nodePath == "" || r.runtime.nodeVersion == "" || r.runtime.chromePath == "" || r.runtime.chromeVersion == "" {
 		return Result{ExitCode: contract.ExitNeedsSetup, Err: ErrNeedsSetup}
 	}
-	args := make([]string, 0, 2+len(request.Profile.LighthouseArgs)+len(request.Args))
+	args := make([]string, 0, 3+len(request.Profile.LighthouseArgs)+len(request.Args))
 	args = append(args, r.runtime.cliPath, request.URL)
 	args = append(args, request.Profile.LighthouseArgs...)
+	args = append(args, "--chrome-path="+r.runtime.chromePath)
 	args = append(args, request.Args...)
 	commands := r.commands
 	if commands == nil {

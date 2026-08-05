@@ -473,6 +473,7 @@ func TestRuntimeRequiresNodeAtLeast2219(t *testing.T) {
 					lookPath: tt.lookup,
 					commands: commands,
 				},
+				chrome: staticChromeResolver{path: "/test/bin/chrome", version: "150.0.0.0"},
 			}
 			installFixture(t, manager.targetDir(t), lighthouseVersion)
 
@@ -493,6 +494,24 @@ func TestRuntimeRequiresNodeAtLeast2219(t *testing.T) {
 				t.Fatalf("node command called=%t want=%t", got, tt.wantCommand)
 			}
 		})
+	}
+}
+
+func TestRuntimeReportsResolvedNodeAndChromeVersions(t *testing.T) {
+	manager := testManager(t, &recordingCommandRunner{})
+	manager.node = staticNodeResolver{path: "/test/bin/node", version: "22.20.0"}
+	manager.chrome = staticChromeResolver{path: "/test/bin/chrome", version: "150.0.7871.187"}
+	installFixture(t, manager.targetDir(t), lighthouseVersion)
+
+	runtime, err := manager.Runtime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.NodeVersion() != "22.20.0" || runtime.ChromeVersion() != "150.0.7871.187" {
+		t.Fatalf("node=%q chrome=%q", runtime.NodeVersion(), runtime.ChromeVersion())
+	}
+	if runtime.ChromePath() != "/test/bin/chrome" {
+		t.Fatalf("chrome path=%q", runtime.ChromePath())
 	}
 }
 
@@ -518,6 +537,7 @@ func TestRunnerUsesLockedCLIAndProfileArgumentsWithoutShell(t *testing.T) {
 			"https://example.com/product?a=1&b=2",
 			"--form-factor=desktop",
 			"--throttling-method=provided",
+			"--chrome-path=/test/bin/chrome",
 			"--output=json",
 		}
 		if !reflect.DeepEqual(args, wantArgs) {
@@ -895,16 +915,41 @@ func testManager(t *testing.T, commands commandRunner) Manager {
 		cacheRoot: t.TempDir(),
 		commands:  commands,
 		node:      staticNodeResolver{path: "/test/bin/node-22.19"},
+		chrome:    staticChromeResolver{path: "/test/bin/chrome", version: "150.0.0.0"},
 	}
 }
 
 type staticNodeResolver struct {
-	path string
-	err  error
+	path    string
+	version string
+	err     error
 }
 
 func (r staticNodeResolver) Resolve(context.Context) (string, error) {
 	return r.path, r.err
+}
+
+func (r staticNodeResolver) Version(context.Context, string) (string, error) {
+	if r.err != nil {
+		return "", r.err
+	}
+	if r.version == "" {
+		return "22.19.0", nil
+	}
+	return r.version, nil
+}
+
+type staticChromeResolver struct {
+	path    string
+	version string
+	err     error
+}
+
+func (r staticChromeResolver) Resolve(context.Context) (chromeRuntime, error) {
+	if r.err != nil {
+		return chromeRuntime{}, r.err
+	}
+	return chromeRuntime{path: r.path, version: r.version}, nil
 }
 
 func (m Manager) targetDir(t *testing.T) string {
