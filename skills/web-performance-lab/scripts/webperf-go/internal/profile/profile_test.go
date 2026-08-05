@@ -17,7 +17,7 @@ func TestResolveReturnsVersionedProfiles(t *testing.T) {
 				Name:             "desktop-observed-v1",
 				FormFactor:       "desktop",
 				ThrottlingMethod: "provided",
-				LighthouseArgs:   []string{"--form-factor=desktop", "--throttling-method=provided"},
+				LighthouseArgs:   []string{"--preset=desktop", "--throttling-method=provided"},
 			},
 		},
 		{
@@ -26,7 +26,7 @@ func TestResolveReturnsVersionedProfiles(t *testing.T) {
 				Name:             "desktop-lab-v1",
 				FormFactor:       "desktop",
 				ThrottlingMethod: "simulate",
-				LighthouseArgs:   []string{"--form-factor=desktop", "--throttling-method=simulate"},
+				LighthouseArgs:   []string{"--preset=desktop", "--throttling-method=simulate"},
 			},
 		},
 		{
@@ -68,5 +68,21 @@ func TestListReturnsIndependentProfiles(t *testing.T) {
 	profiles[0].LighthouseArgs[0] = "changed"
 	if got := List()[0].LighthouseArgs[0]; got == "changed" {
 		t.Fatalf("list exposed mutable profile arguments")
+	}
+}
+
+func TestResolveReturnsIndependentProfile(t *testing.T) {
+	resolved, err := Resolve("desktop-observed-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.LighthouseArgs[0] = "changed"
+
+	again, err := Resolve("desktop-observed-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.LighthouseArgs[0]; got != "--preset=desktop" {
+		t.Fatalf("resolved profile was mutated: %q", got)
 	}
 }

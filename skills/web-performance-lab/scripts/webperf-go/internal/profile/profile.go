@@ -20,13 +20,13 @@ var profiles = []Profile{
 		Name:             "desktop-observed-v1",
 		FormFactor:       "desktop",
 		ThrottlingMethod: "provided",
-		LighthouseArgs:   []string{"--form-factor=desktop", "--throttling-method=provided"},
+		LighthouseArgs:   []string{"--preset=desktop", "--throttling-method=provided"},
 	},
 	{
 		Name:             "desktop-lab-v1",
 		FormFactor:       "desktop",
 		ThrottlingMethod: "simulate",
-		LighthouseArgs:   []string{"--form-factor=desktop", "--throttling-method=simulate"},
+		LighthouseArgs:   []string{"--preset=desktop", "--throttling-method=simulate"},
 	},
 	{
 		Name:             "mobile-lab-v1",
