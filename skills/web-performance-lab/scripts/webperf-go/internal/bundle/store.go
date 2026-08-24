@@ -183,6 +183,37 @@ func (s *Store) Summary() (*Summary, error) {
 	return cloneSummary(summary), nil
 }
 
+// ReadArtifact returns one immutable, hash-verified artifact declared by the
+// bound manifest. Arbitrary bundle-relative paths are rejected even when a file
+// exists at that location.
+func (s *Store) ReadArtifact(relativePath string) ([]byte, error) {
+	if !relativeArtifactPath(relativePath) {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidArtifactPath, relativePath)
+	}
+	var artifact Artifact
+	found := false
+	for _, candidate := range s.manifest.Artifacts {
+		if candidate.Path == relativePath {
+			artifact = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: path is not in the artifact ledger", ErrInvalidArtifactPath)
+	}
+	root, err := s.openRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	contents, err := readVerifiedArtifact(root, artifact)
+	if err != nil {
+		return nil, fmt.Errorf("verify evidence artifact: %w", err)
+	}
+	return contents, nil
+}
+
 // WriteArtifact creates one private, relative evidence artifact. It never
 // replaces a prior artifact, including a pre-existing path introduced by
 // another process.

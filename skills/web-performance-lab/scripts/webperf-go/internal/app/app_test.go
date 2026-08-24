@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,8 @@ import (
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/contract"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/engine"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/lhr"
+	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/profile"
+	webreport "github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/report"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/stats"
 )
 
@@ -42,6 +45,26 @@ func TestRootHelpListsAvailableProfiles(t *testing.T) {
 	for _, name := range []string{"desktop-observed-v1", "desktop-lab-v1", "mobile-lab-v1"} {
 		if !strings.Contains(stdout.String(), name) {
 			t.Fatalf("help did not include %q: %q", name, stdout.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), "report --run <dir> [--run <dir> ...] --out <new.html>") || !strings.Contains(stdout.String(), "report compare --baseline <dir> --candidate <dir> --out <new.html>") {
+		t.Fatalf("help did not include report commands: %q", stdout.String())
+	}
+}
+
+func TestReportSubcommandHelpExitsSuccessfully(t *testing.T) {
+	for _, args := range [][]string{{"report", "--help"}, {"report", "compare", "--help"}} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := Run(context.Background(), args, Dependencies{Stdout: &stdout, Stderr: &stderr})
+		if code != contract.ExitOK {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "Usage of report") {
+			t.Fatalf("args=%v help=%q", args, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "-locale string") {
+			t.Fatalf("args=%v help did not include locale: %q", args, stderr.String())
 		}
 	}
 }
@@ -385,6 +408,582 @@ func TestCompareMakesPartialBundleInconclusive(t *testing.T) {
 	}
 }
 
+func TestReportCreatesDeterministicStandaloneHTMLFromVerifiedBundle(t *testing.T) {
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	out := filepath.Join(t.TempDir(), "report.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", directory, "--out", out)
+	if code != contract.ExitOK || envelope.Status != contract.OK || envelope.Command != "report" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("report mode=%#o", got)
+	}
+	for _, required := range []string{
+		"<!doctype html>",
+		`<html lang="en">`,
+		"Web Performance Evidence Report",
+		"VERIFIED LAB EVIDENCE",
+		"desktop-lab-v1",
+		"5 / 5",
+		"Performance score",
+		"Largest Contentful Paint",
+		"Median",
+		"MAD",
+		"IQR",
+		"LCP element identity is withheld",
+		"Protocol fingerprint",
+		"Cannot Claim",
+	} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("HTML missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"<script",
+		"<link rel=\"stylesheet\"",
+		"src=\"http",
+		"href=\"http",
+		"main &gt; img",
+		directory,
+	} {
+		if strings.Contains(string(contents), forbidden) {
+			t.Fatalf("HTML contains forbidden %q", forbidden)
+		}
+	}
+
+	second := filepath.Join(t.TempDir(), "report.html")
+	code, secondEnvelope := runJSON(
+		t,
+		"--json",
+		"report",
+		"--locale",
+		"en",
+		"--run",
+		directory,
+		"--out",
+		second,
+	)
+	if code != contract.ExitOK || secondEnvelope.Status != contract.OK {
+		t.Fatalf("second render code=%d report=%+v", code, secondEnvelope)
+	}
+	secondContents, err := os.ReadFile(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents, secondContents) {
+		t.Fatal("default and explicit English rendered different HTML bytes")
+	}
+}
+
+func TestReportSupportsExplicitSimplifiedChineseLocale(t *testing.T) {
+	directory := finalizedBundle(t, "PARTIAL", 1500, 0.1, 70)
+	outputDirectory := t.TempDir()
+	first := filepath.Join(outputDirectory, "report-zh-cn.html")
+	second := filepath.Join(outputDirectory, "report-zh-cn-repeat.html")
+
+	code, envelope := runJSON(
+		t,
+		"--json",
+		"report",
+		"--locale",
+		"zh-CN",
+		"--run",
+		directory,
+		"--out",
+		first,
+	)
+	if code != contract.ExitOK || envelope.Status != contract.OK {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`<html lang="zh-CN">`,
+		"网页性能证据报告",
+		"证据状态",
+		"性能得分",
+		"最大内容绘制（LCP）",
+		"LCP 诊断",
+		"临时浏览器清理失败",
+		"证据解读",
+		"不可据此声明",
+		"DIAGNOSTIC ONLY",
+		"PARTIAL",
+	} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("Chinese HTML missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"Web Performance Evidence Report",
+		"Evidence interpretation",
+		"Cannot Claim",
+		"No canonical warnings.",
+	} {
+		if strings.Contains(string(contents), forbidden) {
+			t.Fatalf("Chinese HTML contains English UI copy %q", forbidden)
+		}
+	}
+
+	code, repeatedEnvelope := runJSON(
+		t,
+		"--json",
+		"report",
+		"--locale",
+		"zh-CN",
+		"--run",
+		directory,
+		"--out",
+		second,
+	)
+	if code != contract.ExitOK || repeatedEnvelope.Status != contract.OK {
+		t.Fatalf("repeat code=%d report=%+v", code, repeatedEnvelope)
+	}
+	repeatedContents, err := os.ReadFile(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents, repeatedContents) {
+		t.Fatal("same evidence and locale rendered different HTML bytes")
+	}
+	encoded, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "locale") {
+		t.Fatalf("locale changed the stable report success JSON: %s", encoded)
+	}
+}
+
+func TestReportCompareSupportsExplicitSimplifiedChineseLocale(t *testing.T) {
+	baseline := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	candidate := finalizedBundle(t, "OK", 1200, 0.2, 80)
+	out := filepath.Join(t.TempDir(), "comparison-zh-cn.html")
+
+	code, envelope := runJSON(
+		t,
+		"--json",
+		"report",
+		"compare",
+		"--locale",
+		"zh-CN",
+		"--baseline",
+		baseline,
+		"--candidate",
+		candidate,
+		"--out",
+		out,
+	)
+	if code != contract.ExitOK || envelope.Status != contract.OK {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`<html lang="zh-CN">`,
+		"网页性能对比报告",
+		"对比结论",
+		"基线中位数",
+		"候选中位数",
+		"实质性阈值",
+		"基线",
+		"候选",
+		"改善 · IMPROVEMENT",
+		"回退 · REGRESSION",
+	} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("Chinese comparison HTML missing %q", required)
+		}
+	}
+}
+
+func TestReportRejectsUnsupportedLocaleBeforeReadingEvidence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "report.html")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(
+		context.Background(),
+		[]string{"--json", "report", "--locale", "fr", "--run", "/missing-evidence", "--out", out},
+		Dependencies{Stdout: &stdout, Stderr: &stderr},
+	)
+	var envelope contract.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("stdout was not JSON: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if code != contract.ExitInvalidInput || envelope.Status != contract.InvalidInput {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "unsupported_locale" {
+		t.Fatalf("report=%+v", envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("unsupported locale created output: %v", err)
+	}
+}
+
+func TestReportCompareRejectsUnsupportedLocaleBeforeReadingEvidence(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "comparison.html")
+	code, envelope := runJSON(
+		t,
+		"--json",
+		"report",
+		"compare",
+		"--locale",
+		"fr",
+		"--baseline",
+		"/missing-baseline",
+		"--candidate",
+		"/missing-candidate",
+		"--out",
+		out,
+	)
+	if code != contract.ExitInvalidInput || envelope.Status != contract.InvalidInput {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "unsupported_locale" {
+		t.Fatalf("report=%+v", envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("unsupported locale created comparison output: %v", err)
+	}
+}
+
+func TestReportAllowsVerifiedPartialBundleOnlyAsDiagnostic(t *testing.T) {
+	directory := finalizedBundle(t, "PARTIAL", 1500, 0.1, 70)
+	out := filepath.Join(t.TempDir(), "diagnostic.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", directory, "--out", out)
+	if code != contract.ExitOK || envelope.Status != contract.OK {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"DIAGNOSTIC ONLY", "PARTIAL", "not release acceptance"} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("diagnostic HTML missing %q", required)
+		}
+	}
+	encoded, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"reportClass":"DIAGNOSTIC ONLY"`, `"evidenceStatus":"PARTIAL"`, `"outputCreated":true`} {
+		if !strings.Contains(string(encoded), required) {
+			t.Fatalf("diagnostic JSON missing %q: %s", required, encoded)
+		}
+	}
+}
+
+func TestInspectExposesVerifiedPartialAggregateBranch(t *testing.T) {
+	directory := finalizedBundle(t, "PARTIAL", 1500, 0.1, 70)
+	code, envelope := runJSON(t, "--json", "inspect", "--run", directory)
+	if code != contract.ExitGeneralError || envelope.Status != contract.Inconclusive || envelope.Error == nil || envelope.Error.Code != "aggregate_not_final" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	encoded, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"status":"PARTIAL"`, `"aggregateAvailable":true`} {
+		if !strings.Contains(string(encoded), required) {
+			t.Fatalf("partial inspect JSON missing %q: %s", required, encoded)
+		}
+	}
+}
+
+func TestReportCombinesDistinctProfilesForOneTarget(t *testing.T) {
+	desktop := finalizedBundleWithProfile(t, "OK", "desktop-lab-v1", 1500, 0.1, 70)
+	mobile := finalizedBundleWithProfile(t, "OK", "mobile-lab-v1", 2200, 0.12, 60)
+	out := filepath.Join(t.TempDir(), "profiles.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", mobile, "--run", desktop, "--out", out)
+	if code != contract.ExitOK || envelope.Status != contract.OK {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profileName := range []string{"desktop-lab-v1", "mobile-lab-v1"} {
+		if strings.Count(string(contents), ">"+profileName+"<") < 1 {
+			t.Fatalf("combined report missing %q", profileName)
+		}
+	}
+	if first, second := strings.Index(string(contents), "desktop-lab-v1"), strings.Index(string(contents), "mobile-lab-v1"); first < 0 || second < 0 || first > second {
+		t.Fatalf("profiles were not rendered deterministically: desktop=%d mobile=%d", first, second)
+	}
+}
+
+func TestReportRejectsDuplicateProfileWithoutCreatingOutput(t *testing.T) {
+	first := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	second := finalizedBundle(t, "OK", 1600, 0.1, 68)
+	out := filepath.Join(t.TempDir(), "profiles.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", first, "--run", second, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Error == nil || envelope.Error.Code != "duplicate_profile" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("duplicate-profile output exists: %v", err)
+	}
+}
+
+func TestReportRejectsDifferentRequestedURLsWithoutCreatingOutput(t *testing.T) {
+	first := finalizedBundleWithProfileAndURL(t, "OK", "desktop-lab-v1", "https://example.test/", 1500, 0.1, 70)
+	second := finalizedBundleWithProfileAndURL(t, "OK", "mobile-lab-v1", "https://other.example.test/", 1600, 0.1, 68)
+	out := filepath.Join(t.TempDir(), "profiles.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", first, "--run", second, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Error == nil || envelope.Error.Code != "different_target" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("different-target output exists: %v", err)
+	}
+}
+
+func TestReportRejectsMultipleProfilesWhenRequestedURLHasQuery(t *testing.T) {
+	requestedURL := "https://example.test/?variant=REDACTED"
+	first := finalizedBundleWithProfileAndURL(t, "OK", "desktop-lab-v1", requestedURL, 1500, 0.1, 70)
+	second := finalizedBundleWithProfileAndURL(t, "OK", "mobile-lab-v1", requestedURL, 1600, 0.1, 68)
+	out := filepath.Join(t.TempDir(), "profiles.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", first, "--run", second, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Error == nil || envelope.Error.Code != "ambiguous_target" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("ambiguous-target output exists: %v", err)
+	}
+}
+
+func TestReportRejectsMultipleProfilesWhenRequestedURLHasEmptyQuery(t *testing.T) {
+	requestedURL := "https://example.test/?"
+	first := finalizedBundleWithProfileAndURL(t, "OK", "desktop-lab-v1", requestedURL, 1500, 0.1, 70)
+	second := finalizedBundleWithProfileAndURL(t, "OK", "mobile-lab-v1", requestedURL, 1600, 0.1, 68)
+	out := filepath.Join(t.TempDir(), "profiles.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", first, "--run", second, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Error == nil || envelope.Error.Code != "ambiguous_target" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("empty-query target output exists: %v", err)
+	}
+}
+
+func TestReportCleanupFailureTakesPriorityOverInvalidOutput(t *testing.T) {
+	envelope := reportWriteFailure("report", errors.Join(webreport.ErrInvalidOutput, webreport.ErrCleanupFailed))
+	if envelope.Status != contract.ReportFailed || envelope.Error == nil || envelope.Error.Code != "report_cleanup_failed" {
+		t.Fatalf("report=%+v", envelope)
+	}
+}
+
+func TestReportCompareCreatesOneStrictComparisonHTML(t *testing.T) {
+	baseline := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	candidate := finalizedBundle(t, "OK", 1200, 0.2, 80)
+	out := filepath.Join(t.TempDir(), "comparison.html")
+
+	code, envelope := runJSON(t, "--json", "report", "compare", "--baseline", baseline, "--candidate", candidate, "--out", out)
+	if code != contract.ExitOK || envelope.Status != contract.OK || envelope.Command != "report compare" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"Web Performance Comparison Report",
+		"MIXED",
+		"Baseline",
+		"Candidate",
+		"NO MATERIAL CHANGE",
+		"IMPROVEMENT",
+		"REGRESSION",
+		"Materiality floor",
+	} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("comparison HTML missing %q", required)
+		}
+	}
+}
+
+func TestReportCompareRejectsPartialEvidenceWithoutCreatingOutput(t *testing.T) {
+	baseline := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	candidate := finalizedBundle(t, "PARTIAL", 1200, 0.1, 80)
+	out := filepath.Join(t.TempDir(), "comparison.html")
+
+	code, envelope := runJSON(t, "--json", "report", "compare", "--baseline", baseline, "--candidate", candidate, "--out", out)
+	if code == contract.ExitOK || envelope.Status != contract.Inconclusive || envelope.Error == nil || envelope.Error.Code != "incomplete_bundle" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("comparison output exists after rejection: %v", err)
+	}
+}
+
+func TestReportCompareRejectsIncompatibleProfilesWithoutCreatingOutput(t *testing.T) {
+	baseline := finalizedBundleWithProfile(t, "OK", "desktop-lab-v1", 1500, 0.1, 70)
+	candidate := finalizedBundleWithProfile(t, "OK", "mobile-lab-v1", 1200, 0.1, 80)
+	out := filepath.Join(t.TempDir(), "comparison.html")
+
+	code, envelope := runJSON(t, "--json", "report", "compare", "--baseline", baseline, "--candidate", candidate, "--out", out)
+	if code == contract.ExitOK || envelope.Status != contract.IncompatibleProtocol || envelope.Error == nil || envelope.Error.Code != "incompatible_protocol" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("incompatible comparison output exists: %v", err)
+	}
+}
+
+func TestReportNeverOverwritesExistingOutput(t *testing.T) {
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	out := filepath.Join(t.TempDir(), "report.html")
+	if err := os.WriteFile(out, []byte("keep me"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	code, envelope := runJSON(t, "--json", "report", "--run", directory, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Status != contract.InvalidInput || envelope.Error == nil || envelope.Error.Code != "out_exists" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	contents, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "keep me" {
+		t.Fatalf("existing output changed: %q", contents)
+	}
+}
+
+func TestReportDoesNotEchoCallerOutputPath(t *testing.T) {
+	if !webreport.OutputSupported() {
+		t.Skip("private report output is unsupported on this platform")
+	}
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	out := filepath.Join(t.TempDir(), "private-user-path", "report.html")
+	if err := os.Mkdir(filepath.Dir(out), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"--json", "report", "--run", directory, "--out", out}, Dependencies{Stdout: &stdout, Stderr: &stderr})
+	if code != contract.ExitOK {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), out) || strings.Contains(stderr.String(), out) || strings.Contains(stdout.String(), filepath.Dir(out)) {
+		t.Fatalf("report output leaked caller path: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	for _, required := range []string{`"outputCreated":true`, `"evidenceStatus":"OK"`} {
+		if !strings.Contains(stdout.String(), required) {
+			t.Fatalf("report output missing %q: %s", required, stdout.String())
+		}
+	}
+}
+
+func TestReportRejectsOutputInsideInputEvidenceBundle(t *testing.T) {
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	before := directoryEntries(t, directory)
+	out := filepath.Join(directory, "report.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", directory, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Status != contract.InvalidInput || envelope.Error == nil || envelope.Error.Code != "out_inside_bundle" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("inside-bundle output exists: %v", err)
+	}
+	if got := directoryEntries(t, directory); !equalStrings(got, before) {
+		t.Fatalf("bundle changed: before=%v after=%v", before, got)
+	}
+}
+
+func TestReportRejectsSymlinkedOutputParentInsideInputEvidenceBundle(t *testing.T) {
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	link := filepath.Join(t.TempDir(), "evidence-link")
+	if err := os.Symlink(directory, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	out := filepath.Join(link, "report.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", directory, "--out", out)
+	if code != contract.ExitInvalidInput || envelope.Error == nil || envelope.Error.Code != "out_inside_bundle" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, "report.html")); !os.IsNotExist(err) {
+		t.Fatalf("symlinked inside-bundle output exists: %v", err)
+	}
+}
+
+func TestReportRequiresExplicitOutputAndVerifiedAggregate(t *testing.T) {
+	verified := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	code, envelope := runJSON(t, "--json", "report", "--run", verified)
+	if code != contract.ExitInvalidInput || envelope.Error == nil || envelope.Error.Code != "out_required" {
+		t.Fatalf("missing out code=%d report=%+v", code, envelope)
+	}
+
+	pending := pendingBundle(t)
+	out := filepath.Join(t.TempDir(), "report.html")
+	code, envelope = runJSON(t, "--json", "report", "--run", pending, "--out", out)
+	if code == contract.ExitOK || envelope.Status != contract.Inconclusive || envelope.Error == nil || envelope.Error.Code != "aggregate_unavailable" {
+		t.Fatalf("pending code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("report output exists for pending evidence: %v", err)
+	}
+}
+
+func TestReportRejectsTamperedLHRWithoutCreatingOutput(t *testing.T) {
+	directory := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	if err := os.WriteFile(filepath.Join(directory, "samples", "run-1.lhr.json"), []byte(`{"tampered":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "report.html")
+
+	code, envelope := runJSON(t, "--json", "report", "--run", directory, "--out", out)
+	if code == contract.ExitOK || envelope.Status != contract.Inconclusive || envelope.Error == nil || envelope.Error.Code != "invalid_bundle" {
+		t.Fatalf("code=%d report=%+v", code, envelope)
+	}
+	if _, err := os.Lstat(out); !os.IsNotExist(err) {
+		t.Fatalf("tampered-evidence output exists: %v", err)
+	}
+}
+
+func TestInspectAndCompareDoNotCreateHTMLArtifacts(t *testing.T) {
+	baseline := finalizedBundle(t, "OK", 1500, 0.1, 70)
+	candidate := finalizedBundle(t, "OK", 1200, 0.1, 80)
+	beforeBaseline := directoryEntries(t, baseline)
+	beforeCandidate := directoryEntries(t, candidate)
+
+	if code, envelope := runJSON(t, "--json", "inspect", "--run", baseline); code != contract.ExitOK || envelope.Status != contract.OK {
+		t.Fatalf("inspect code=%d report=%+v", code, envelope)
+	}
+	if code, envelope := runJSON(t, "--json", "compare", "--baseline", baseline, "--candidate", candidate); code != contract.ExitOK || envelope.Status != contract.OK {
+		t.Fatalf("compare code=%d report=%+v", code, envelope)
+	}
+	if got := directoryEntries(t, baseline); !equalStrings(got, beforeBaseline) {
+		t.Fatalf("inspect changed baseline bundle: before=%v after=%v", beforeBaseline, got)
+	}
+	if got := directoryEntries(t, candidate); !equalStrings(got, beforeCandidate) {
+		t.Fatalf("compare changed candidate bundle: before=%v after=%v", beforeCandidate, got)
+	}
+}
+
 func TestRawRequiresSeparatorAndRejectsGlobalJSON(t *testing.T) {
 	code, report := runJSON(t, "--json", "raw", "lighthouse", "--", "--help")
 	if code != contract.ExitInvalidInput || report.Status != contract.InvalidInput || report.Error == nil || report.Error.Code != "raw_json_unsupported" {
@@ -441,6 +1040,17 @@ func runJSON(t *testing.T, args ...string) (int, contract.Envelope) {
 
 func runJSONWith(t *testing.T, deps Dependencies, args ...string) (int, contract.Envelope) {
 	t.Helper()
+	if !webreport.OutputSupported() {
+		for _, arg := range args {
+			if arg == "--json" {
+				continue
+			}
+			if arg == "report" {
+				t.Skip("private report output is unsupported on this platform")
+			}
+			break
+		}
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	deps.Stdout = &stdout
@@ -454,10 +1064,18 @@ func runJSONWith(t *testing.T, deps Dependencies, args ...string) (int, contract
 }
 
 func finalizedBundle(t *testing.T, status string, lcp, cls, score float64) string {
+	return finalizedBundleWithProfile(t, status, "desktop-lab-v1", lcp, cls, score)
+}
+
+func finalizedBundleWithProfile(t *testing.T, status, profileName string, lcp, cls, score float64) string {
+	return finalizedBundleWithProfileAndURL(t, status, profileName, "https://example.test/", lcp, cls, score)
+}
+
+func finalizedBundleWithProfileAndURL(t *testing.T, status, profileName, requestedURL string, lcp, cls, score float64) string {
 	t.Helper()
 	directory := filepath.Join(t.TempDir(), "run")
-	requestedURL := "https://example.test/"
-	store, err := bundle.Create(directory, bundle.Manifest{SchemaVersion: 1, Status: "RUNNING", RequestedURL: requestedURL}, appProtocol())
+	protocol := appProtocolFor(t, profileName)
+	store, err := bundle.Create(directory, bundle.Manifest{SchemaVersion: 1, Status: "RUNNING", RequestedURL: requestedURL}, protocol)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +1089,7 @@ func finalizedBundle(t *testing.T, status string, lcp, cls, score float64) strin
 	summary := bundle.Summary{
 		SchemaVersion:  1,
 		Status:         status,
-		Profile:        "desktop-lab-v1",
+		Profile:        profileName,
 		RequestedURL:   requestedURL,
 		FinalURL:       "https://example.test/landing",
 		RequestedRuns:  5,
@@ -513,13 +1131,51 @@ func pendingBundle(t *testing.T) string {
 	return directory
 }
 
+func directoryEntries(t *testing.T, directory string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(entries))
+	for index, entry := range entries {
+		names[index] = entry.Name()
+	}
+	return names
+}
+
 func appProtocol() bundle.Protocol {
+	resolved, err := profile.Resolve("desktop-lab-v1")
+	if err != nil {
+		panic(err)
+	}
 	return bundle.CompleteProtocol(bundle.Protocol{
 		SchemaVersion:     1,
-		Profile:           "desktop-lab-v1",
-		FormFactor:        "desktop",
-		ThrottlingMethod:  "simulate",
-		ResolvedFlags:     []string{"--preset=desktop", "--throttling-method=simulate"},
+		Profile:           resolved.Name,
+		FormFactor:        resolved.FormFactor,
+		ThrottlingMethod:  resolved.ThrottlingMethod,
+		ResolvedFlags:     resolved.LighthouseArgs,
+		RuntimeFlags:      bundle.ExpectedRuntimeFlags(),
+		LighthouseVersion: "13.4.1",
+		NodeVersion:       "24.16.0",
+		ChromeVersion:     "150.0.0.0",
+		OS:                "darwin",
+		Arch:              "arm64",
+	})
+}
+
+func appProtocolFor(t *testing.T, profileName string) bundle.Protocol {
+	t.Helper()
+	resolved, err := profile.Resolve(profileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bundle.CompleteProtocol(bundle.Protocol{
+		SchemaVersion:     1,
+		Profile:           resolved.Name,
+		FormFactor:        resolved.FormFactor,
+		ThrottlingMethod:  resolved.ThrottlingMethod,
+		ResolvedFlags:     resolved.LighthouseArgs,
 		RuntimeFlags:      bundle.ExpectedRuntimeFlags(),
 		LighthouseVersion: "13.4.1",
 		NodeVersion:       "24.16.0",

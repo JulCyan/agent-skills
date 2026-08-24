@@ -24,6 +24,7 @@ const (
 	EngineFailed         Status = "ENGINE_FAILED"
 	NavigationFailed     Status = "NAVIGATION_FAILED"
 	ParseFailed          Status = "PARSE_FAILED"
+	ReportFailed         Status = "REPORT_FAILED"
 	IncompatibleProtocol Status = "INCOMPATIBLE_PROTOCOL"
 	Interrupted          Status = "INTERRUPTED"
 )

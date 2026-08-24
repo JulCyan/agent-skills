@@ -51,3 +51,23 @@
   and rerun affected validation.
 - [x] Record only verified results in the final summary; leave field data, CI,
   Release, package publication, and production support unclaimed.
+
+## 7. Optional offline HTML reports
+
+- [x] Add failing then passing tests for explicit single/comparison reports,
+  deterministic rendering, `PARTIAL` diagnostic labelling, no-replace output,
+  private permissions, active-content escaping, and default zero-HTML behavior.
+- [x] Implement hash-verified representative diagnostics, one offline
+  standalone renderer, repeated distinct-profile input, strict comparison, and
+  structured `REPORT_FAILED` handling without changing collection semantics.
+- [x] Document the non-interactive opt-in policy: explicit initial request runs
+  after verification; otherwise deliver results first and offer at most once.
+- [x] Generate single and comparison HTML from retained real evidence, inspect
+  visual/security output, complete independent review, and rerun full repository
+  acceptance.
+- [x] Add explicit built-in `en`/`zh-CN` report localization with stable English
+  default, current-report-request language routing, canonical machine fields,
+  and no user-authored template or runtime model translation.
+- [x] Generate both locales from retained real evidence, verify deterministic
+  bytes/offline output and responsive typography, then rerun independent review
+  and full repository acceptance.

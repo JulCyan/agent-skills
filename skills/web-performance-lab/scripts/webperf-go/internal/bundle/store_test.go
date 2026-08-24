@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -724,6 +725,53 @@ func TestFinalizeRejectsDifferingExistingSummary(t *testing.T) {
 	contents, readErr := os.ReadFile(filepath.Join(target, summaryFile))
 	if readErr != nil || string(contents) != `{"status":"foreign"}` {
 		t.Fatalf("foreign summary changed: %q err=%v", contents, readErr)
+	}
+}
+
+func TestReadArtifactReturnsOnlyHashVerifiedLedgerEntries(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "run")
+	store, err := Create(directory, Manifest{SchemaVersion: 1, Status: "RUNNING"}, Protocol{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := "samples/run-1.lhr.json"
+	payload := []byte(`{"verified":true}`)
+	digest, err := store.WriteArtifact(artifactPath, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Finalize(Manifest{
+		SchemaVersion: 1,
+		Status:        "PARTIAL",
+		Attempts: []Attempt{{
+			Number:   1,
+			Status:   "PARSE_FAILED",
+			Artifact: artifactPath,
+			Error:    "Lighthouse report parse failed",
+		}},
+		Artifacts: []Artifact{{Kind: "lhr", Path: artifactPath, SHA256: digest}},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := reopened.ReadArtifact(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents, payload) {
+		t.Fatalf("contents=%q", contents)
+	}
+	if _, err := reopened.ReadArtifact("manifest.json"); !errors.Is(err, ErrInvalidArtifactPath) {
+		t.Fatalf("non-ledger read error=%v", err)
+	}
+
+	writeFile(t, filepath.Join(directory, artifactPath), []byte(`{"verified":false}`), 0o600)
+	if _, err := reopened.ReadArtifact(artifactPath); err == nil {
+		t.Fatal("hash-mismatched artifact was accepted")
 	}
 }
 

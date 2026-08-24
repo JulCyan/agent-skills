@@ -10,6 +10,8 @@
 
 Profile 是编译内置合同，不接受调用者临时改 flags。每次 attempt 使用新 Chrome user-data directory；Lighthouse 固定为 13.4.1，并只运行 performance category。协议还记录 Node、Chrome、OS、arch、resolved flags 与 executor runtime flags。
 
+Skill 对无限定 URL 请求默认使用 `mobile-lab-v1`；用户明确要求 desktop 时使用 `desktop-lab-v1`，明确要求本机未模拟、unthrottled 或 observed 时才使用 `desktop-observed-v1`。这是 agent 路由规则；CLI 为保持自动化确定性仍要求显式 `--profile`。
+
 ## 采集协议
 
 1. 在同一时段、相近主机负载下收集 baseline 与 candidate。
@@ -39,14 +41,18 @@ Profile 是编译内置合同，不接受调用者临时改 flags。每次 attem
 
 超过 floor 才分类为 `improvement` 或 `regression`，否则是 `no_material_change`。高低方向按指标语义判断；同时存在改善与退步时 overall 为 `mixed`。这是同协议的 lab comparison，不应外推为真实用户体验或 field percentile。
 
-## 不稳定性与报告
+## 不稳定性与结果解读
 
-Warnings 会标记 LCP selector/final URL 改变、Lighthouse warning、attempt failure、浏览器清理失败，以及高 IQR。报告按以下顺序组织：
+Warnings 会标记 LCP selector/final URL 改变、Lighthouse warning、attempt failure、浏览器清理失败，以及高 IQR。终端结论或显式 HTML 报告按以下顺序组织：
 
 1. profile、完整 protocol fingerprint 与 `successfulRuns/requestedRuns`；
 2. 官方 Performance Score 和各指标 median + MAD + IQR；
 3. warnings 与范围；
 4. compatible compare verdict，或明确写 `INCOMPATIBLE_PROTOCOL`/`INCONCLUSIVE`；
 5. `Cannot Claim`：field/RUM/CrUX、真实用户 percentile、跨协议优劣。
+
+默认工作流在终端/JSON 结果后结束，不创建 HTML。显式 HTML 使用经过完整校验的 aggregate：`OK` 可作为 verified lab evidence；`inspect` 虽返回顶层 `INCONCLUSIVE`，但当 `data.status=PARTIAL` 且 `data.aggregateAvailable=true` 时可生成 single diagnostic；compare HTML 必须两侧均为 `OK` 且严格兼容。报告选择 LCP 最接近中位数的成功 attempt 作为代表样本；LCP phase、estimated savings 与 workload signals 仅从固定数值 allowlist 提取，缺失时明确显示 unavailable，不推断或编造建议，也不复制 LCP selector。
+
+不含 query 参数的同一 requested URL 可把多个 profile 放入一份 HTML，但各 profile 保持独立区块，不计算跨 profile delta。query value 在 evidence 中已脱敏，因此含 query 的 target 拒绝多 profile 合并，避免把不同真实目标误认成同一站点。HTML 仅是 evidence 的离线派生视图，不重跑测量，也不改变原 bundle。`--locale en|zh-CN` 只改变工具自有展示文案；CLI 默认固定 `en`。Skill 优先服从用户明确指定；否则仅按用户当前报告请求的主要自然语言显式传值：中文传 `zh-CN`，其它或无法判断时传 `en`。用户明确要求不支持的 locale 时不静默回退。相同 evidence 与 locale 的 bytes 必须一致，JSON 和 protocol fingerprint 不随报告语言变化。私有 HTML 原子输出当前限定在能实施 `0600` 与 directory sync 的 Unix 平台；其它平台 fail closed。默认不生成每次 attempt 的 Lighthouse 原生 HTML。
 
 合成目标示例使用 `https://example.test/page`；真实 target 仅作为命令输入，不写入 Skill 文档或版本控制中的测试 fixture。

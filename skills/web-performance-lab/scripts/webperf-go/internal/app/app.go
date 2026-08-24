@@ -18,6 +18,7 @@ import (
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/contract"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/engine"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/profile"
+	webreport "github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/report"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/safeurl"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/stats"
 )
@@ -94,6 +95,8 @@ func dispatch(ctx context.Context, args []string, stderr io.Writer, deps Depende
 		return inspect(args[1:], stderr), false
 	case "compare":
 		return compare(args[1:], stderr), false
+	case "report":
+		return reportCommand(args[1:], stderr), false
 	case "raw":
 		return invalid("raw", "invalid_raw_command", "expected raw lighthouse -- <official flags>"), false
 	default:
@@ -354,6 +357,170 @@ func compare(args []string, stderr io.Writer) contract.Envelope {
 	return contract.Envelope{SchemaVersion: contract.SchemaVersion, Command: "compare", Status: contract.OK, Data: report}
 }
 
+func reportCommand(args []string, stderr io.Writer) contract.Envelope {
+	if len(args) > 0 && args[0] == "compare" {
+		return comparisonReport(args[1:], stderr)
+	}
+	flags := flag.NewFlagSet("report", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var runs stringListFlag
+	flags.Var(&runs, "run", "verified evidence directory; repeat for another profile of the same target")
+	out := flags.String("out", "", "new standalone HTML output")
+	localeName := flags.String("locale", string(webreport.LocaleEnglish), "report language: en or zh-CN")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return contract.Envelope{SchemaVersion: contract.SchemaVersion, Command: "report", Status: contract.OK}
+		}
+		return invalid("report", "invalid_flags", "report accepts only repeatable --run, --out, and --locale flags")
+	}
+	if flags.NArg() != 0 {
+		return invalid("report", "invalid_flags", "report accepts only repeatable --run, --out, and --locale flags")
+	}
+	if len(runs) == 0 || hasEmptyString(runs) {
+		return invalid("report", "run_required", "report requires at least one run directory")
+	}
+	if *out == "" {
+		return invalid("report", "out_required", "report requires a new HTML output path")
+	}
+	locale, err := webreport.ParseLocale(*localeName)
+	if err != nil {
+		return invalid("report", "unsupported_locale", "report locale must be en or zh-CN")
+	}
+	document, err := webreport.BuildSingle([]string(runs))
+	if err != nil {
+		return reportBuildFailure("report", err)
+	}
+	document.Locale = locale
+	return writeReport("report", *out, document, []string(runs))
+}
+
+func comparisonReport(args []string, stderr io.Writer) contract.Envelope {
+	flags := flag.NewFlagSet("report compare", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	baseline := flags.String("baseline", "", "baseline evidence directory")
+	candidate := flags.String("candidate", "", "candidate evidence directory")
+	out := flags.String("out", "", "new standalone HTML output")
+	localeName := flags.String("locale", string(webreport.LocaleEnglish), "report language: en or zh-CN")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return contract.Envelope{SchemaVersion: contract.SchemaVersion, Command: "report compare", Status: contract.OK}
+		}
+		return invalid(
+			"report compare",
+			"invalid_flags",
+			"report compare accepts only baseline, candidate, out, and locale flags",
+		)
+	}
+	if flags.NArg() != 0 {
+		return invalid(
+			"report compare",
+			"invalid_flags",
+			"report compare accepts only baseline, candidate, out, and locale flags",
+		)
+	}
+	if *baseline == "" || *candidate == "" {
+		return invalid("report compare", "bundle_required", "report compare requires baseline and candidate directories")
+	}
+	if *out == "" {
+		return invalid("report compare", "out_required", "report compare requires a new HTML output path")
+	}
+	locale, err := webreport.ParseLocale(*localeName)
+	if err != nil {
+		return invalid("report compare", "unsupported_locale", "report locale must be en or zh-CN")
+	}
+	document, err := webreport.BuildComparison(*baseline, *candidate)
+	if err != nil {
+		return reportBuildFailure("report compare", err)
+	}
+	document.Locale = locale
+	return writeReport("report compare", *out, document, []string{*baseline, *candidate})
+}
+
+func writeReport(command, output string, document webreport.Document, bundlePaths []string) contract.Envelope {
+	contents, err := webreport.Render(document)
+	if err != nil {
+		return failure(command, contract.ReportFailed, "report_render_failed", "HTML report rendering failed", "retain the verified evidence and retry with this webperf version", err)
+	}
+	if err := webreport.WriteNew(output, contents, bundlePaths); err != nil {
+		return reportWriteFailure(command, err)
+	}
+	profiles := make([]string, len(document.Runs))
+	for index, run := range document.Runs {
+		profiles[index] = run.Profile
+	}
+	data := reportData{
+		Kind:           document.Kind,
+		ReportClass:    document.ReportClass,
+		EvidenceStatus: document.EvidenceStatus,
+		OutputCreated:  true,
+		Profiles:       profiles,
+	}
+	warnings := []string(nil)
+	if document.Notice != "" {
+		warnings = []string{document.Notice}
+	}
+	return contract.Envelope{SchemaVersion: contract.SchemaVersion, Command: command, Status: contract.OK, Data: data, Warnings: warnings}
+}
+
+func reportWriteFailure(command string, err error) contract.Envelope {
+	switch {
+	case errors.Is(err, webreport.ErrUnsupportedPlatform):
+		return failure(command, contract.ReportFailed, "report_platform_unsupported", "private HTML report output is unsupported on this platform", "generate the report on a supported Unix platform while retaining the verified evidence", err)
+	case errors.Is(err, webreport.ErrCleanupFailed):
+		return failure(command, contract.ReportFailed, "report_cleanup_failed", "HTML report output could not be cleaned up safely", "retain the verified evidence and inspect the caller-selected output directory before retrying", err)
+	case errors.Is(err, webreport.ErrOutputInsideBundle):
+		return invalid(command, "out_inside_bundle", "report output must be outside every input evidence bundle")
+	case errors.Is(err, webreport.ErrOutputExists):
+		return invalid(command, "out_exists", "report output already exists")
+	case errors.Is(err, webreport.ErrInvalidOutput):
+		return invalid(command, "invalid_out", "report output must be a new .html file in an existing directory")
+	default:
+		return failure(command, contract.ReportFailed, "report_write_failed", "HTML report could not be written", "retain the verified evidence and choose a writable new output path", err)
+	}
+}
+
+func reportBuildFailure(command string, err error) contract.Envelope {
+	switch {
+	case errors.Is(err, webreport.ErrAggregateUnavailable):
+		return failure(command, contract.Inconclusive, "aggregate_unavailable", "report requires a verified aggregate", "collect at least three successful samples and inspect the evidence", err)
+	case errors.Is(err, webreport.ErrIncompleteBundle), errors.Is(err, webcompare.ErrIncompleteBundle):
+		return failure(command, contract.Inconclusive, "incomplete_bundle", "comparison report requires fully successful evidence bundles", "use a diagnostic single report for verified PARTIAL evidence or collect complete bundles", err)
+	case errors.Is(err, webreport.ErrInvalidEvidence):
+		return invalidEvidence(command, "invalid_bundle", "report could not verify the evidence bundle", err)
+	case errors.Is(err, webreport.ErrDuplicateProfile):
+		return invalid(command, "duplicate_profile", "single report accepts only one bundle per profile")
+	case errors.Is(err, webreport.ErrDifferentTarget):
+		return invalid(command, "different_target", "single report requires every profile to use one requested URL")
+	case errors.Is(err, webreport.ErrAmbiguousTarget):
+		return invalid(command, "ambiguous_target", "multiple-profile reports require a requested URL without query parameters")
+	}
+	var incompatible *webcompare.IncompatibleError
+	if errors.As(err, &incompatible) {
+		result := failure(command, contract.IncompatibleProtocol, "incompatible_protocol", "measurement protocols are incompatible", "if a comparison is still needed, collect both bundles under one exact profile and runtime", err)
+		result.Data = incompatibleFieldsData{Fields: append([]string(nil), incompatible.Fields...)}
+		return result
+	}
+	return failure(command, contract.ReportFailed, "report_build_failed", "HTML report could not be built", "inspect the evidence bundles and retry with this webperf version", err)
+}
+
+type stringListFlag []string
+
+func (values *stringListFlag) String() string { return strings.Join(*values, ",") }
+
+func (values *stringListFlag) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func hasEmptyString(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func rawLighthouse(ctx context.Context, args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	if len(args) < 3 || args[0] != "raw" || args[1] != "lighthouse" || args[2] != "--" {
 		return render(stdout, stderr, false, invalid("raw lighthouse", "invalid_raw_command", "expected raw lighthouse -- <official flags>"))
@@ -523,6 +690,10 @@ func render(stdout, stderr io.Writer, jsonOutput bool, report contract.Envelope)
 		if comparison, ok := report.Data.(webcompare.Report); ok {
 			renderHumanCompare(stdout, comparison)
 		}
+	} else if (report.Command == "report" || report.Command == "report compare") && report.Error == nil {
+		if data, ok := report.Data.(reportData); ok {
+			renderHumanReport(stdout, data)
+		}
 	} else if report.Error == nil {
 		if profiles, ok := report.Data.([]profile.Profile); ok && report.Command == "profiles list" {
 			for _, item := range profiles {
@@ -603,6 +774,13 @@ func renderHumanCompare(stdout io.Writer, report webcompare.Report) {
 	}
 }
 
+func renderHumanReport(stdout io.Writer, report reportData) {
+	_, _ = fmt.Fprintln(stdout, "report: OK")
+	_, _ = fmt.Fprintf(stdout, "kind: %s\n", report.Kind)
+	_, _ = fmt.Fprintf(stdout, "class: %s\n", report.ReportClass)
+	_, _ = fmt.Fprintln(stdout, "output: created at caller-selected path")
+}
+
 func splitGlobalFlags(args []string) (bool, []string) {
 	jsonOutput := false
 	for len(args) > 0 && args[0] == "--json" {
@@ -625,7 +803,7 @@ func writers(deps Dependencies) (io.Writer, io.Writer) {
 }
 
 func commands() []string {
-	return []string{"doctor", "profiles list", "engine status", "engine setup", "collect", "inspect", "compare", "raw lighthouse"}
+	return []string{"doctor", "profiles list", "engine status", "engine setup", "collect", "inspect", "compare", "report", "report compare", "raw lighthouse"}
 }
 
 type helpData struct {
@@ -682,8 +860,38 @@ type incompatibleFieldsData struct {
 	Fields []string `json:"incompatibleFields"`
 }
 
+type reportData struct {
+	Kind           string   `json:"kind"`
+	ReportClass    string   `json:"reportClass"`
+	EvidenceStatus string   `json:"evidenceStatus"`
+	OutputCreated  bool     `json:"outputCreated"`
+	Profiles       []string `json:"profiles"`
+}
+
 func helpText() string {
-	return "webperf measures public web performance with explicit, repeatable protocols.\n\nUsage:\n  webperf [--json] <command>\n\nCommands:\n  doctor\n  profiles list\n  engine status\n  engine setup\n  collect --url <url> --profile <name> --runs 5 --out <dir>\n  inspect --run <dir>\n  compare --baseline <dir> --candidate <dir>\n  raw lighthouse -- <official flags>\n\nAvailable profiles:\n  " + strings.Join(profileNames(), "\n  ") + "\n"
+	lines := []string{
+		"webperf measures public web performance with explicit, repeatable protocols.",
+		"",
+		"Usage:",
+		"  webperf [--json] <command>",
+		"",
+		"Commands:",
+		"  doctor",
+		"  profiles list",
+		"  engine status",
+		"  engine setup",
+		"  collect --url <url> --profile <name> --runs 5 --out <dir>",
+		"  inspect --run <dir>",
+		"  compare --baseline <dir> --candidate <dir>",
+		"  report --run <dir> [--run <dir> ...] --out <new.html> [--locale en|zh-CN]",
+		"  report compare --baseline <dir> --candidate <dir> --out <new.html> [--locale en|zh-CN]",
+		"  raw lighthouse -- <official flags>",
+		"",
+		"Available profiles:",
+		"  " + strings.Join(profileNames(), "\n  "),
+		"",
+	}
+	return strings.Join(lines, "\n")
 }
 
 func profileNames() []string {

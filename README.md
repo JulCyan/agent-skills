@@ -10,9 +10,9 @@ Status: **Public preview**
 
 - `shopify-media-sync` — plans, previews, executes, inspects, and safely
   recovers Shopify Files media synchronization.
-- `web-performance-lab` — collects, inspects, and compares repeatable
-  Lighthouse measurements for public web pages without assuming a framework or
-  commerce platform.
+- `web-performance-lab` — collects, inspects, compares, and optionally renders
+  verified offline HTML from repeatable Lighthouse measurements for public web
+  pages without assuming a framework or commerce platform.
 
 ## Install
 
@@ -66,7 +66,9 @@ authorization because it connects to the npm registry and writes a locked
 engine to the user's cache. Formal measurement uses five sequential runs,
 reports medians with dispersion, and compares only identical protocol
 fingerprints. Raw evidence can contain target details and must remain outside
-Git.
+Git. HTML is opt-in after evidence verification; normal collection, inspection,
+and comparison create no report artifact. Reports have deterministic built-in
+English and Simplified Chinese presentation without changing evidence or JSON.
 
 ## Safety
 

@@ -16,7 +16,8 @@ authentication, remote mutation, background service, upload, or CI gate.
 The installable unit is `skills/web-performance-lab`. A portable launcher finds
 an explicitly trusted binary or runs the bundled Go source. The Go CLI owns the
 command contract, profile registry, setup checks, sequential orchestration,
-artifact store, statistics, comparison, and structured errors.
+artifact store, statistics, comparison, deterministic report rendering, and
+structured errors.
 
 Lighthouse remains an external measurement engine. `engine setup` installs one
 exact package version into a versioned user cache. Collection resolves only the
@@ -53,12 +54,18 @@ The first command families are:
 - `webperf --json collect --url <url> --profile <name> --runs 5 --out <dir>`
 - `webperf --json inspect --run <dir>`
 - `webperf --json compare --baseline <dir> --candidate <dir>`
+- `webperf --json report --run <dir> [--run <dir> ...] --out <new.html> [--locale en|zh-CN]`
+- `webperf --json report compare --baseline <dir> --candidate <dir> --out <new.html> [--locale en|zh-CN]`
 - `webperf raw lighthouse -- <official flags>`
 
 Human output is concise by default. With `--json`, stdout contains exactly one
 documented JSON envelope and progress goes to stderr. `doctor` and `engine
 status` are read-only. `engine setup` is the only command that installs the
 engine. High-level collection requires an explicit profile and output path.
+
+Report commands are explicit derived-artifact operations. `collect`, `inspect`,
+and `compare` never create HTML and the CLI remains non-interactive. Rendering
+does not start the engine or rerun a sample.
 
 The raw command is an expert escape hatch. It uses the locked engine but does
 not claim the high-level protocol, aggregation, redaction, or comparison
@@ -132,6 +139,49 @@ a regression; the result status carries the classification. CI-specific exit
 behavior is outside v1. Invalid bundles, incompatible protocols, and incomplete
 analysis return nonzero structured errors.
 
+## HTML report model
+
+The report package first opens and fully validates the immutable bundle,
+including manifest, protocol, summary hash, artifact ledger, every raw LHR hash,
+and independently recomputed samples. It then selects the successful attempt
+closest to median LCP as a deterministic representative. Optional diagnostics
+copy only numeric fields from a fixed audit allowlist and use executor-owned
+labels; raw LCP selectors, arbitrary audit prose, resource URLs, snippets, and
+request rows are not rendered.
+
+A single-target report accepts one bundle per distinct profile and requires the
+same sanitized requested URL with no query component. Query values are removed
+from persisted summaries, so v1 rejects multi-profile reports for query-bearing
+targets rather than merging ambiguous identities. Profile sections remain
+independent because cross-profile deltas are invalid. A comparison report reuses
+the strict compare model and requires both bundles to be complete `OK`. A
+verified `PARTIAL` aggregate may produce only a prominently labelled
+`DIAGNOSTIC ONLY` single report.
+
+The renderer uses contextual HTML escaping and one embedded template. Its CSS
+and data are inline; it has no JavaScript, external stylesheet, font, image,
+tracker, or network request. Measurement timestamps come from evidence, so the
+same bundle and locale produce identical bytes. Human-facing copy is compiled
+into the Go binary for exact `en` and `zh-CN`; the CLI default is always `en`
+and never inherits the host locale. The Skill honors an explicitly requested
+locale first. Otherwise it selects from the main natural language of the
+current report request only: Chinese uses `zh-CN`, while any other or unclear
+request uses `en`. It never silently falls back from an explicitly unsupported
+locale. One file has one locale, while
+technical metric abbreviations, profile names, evidence statuses, report
+classes, protocol fingerprints, and JSON fields remain canonical. User
+templates and runtime model translation are outside the contract. Output is a
+new caller-selected `.html`
+file with mode `0600`, outside and independent from the evidence bundle. Output
+uses a descriptor-bound parent, pre/post-link inode ancestor checks, a private
+temporary file, and a no-replace atomic link commit. An existing file,
+directory, symlink, case-insensitive bundle alias, or replaced/moved parent is
+never followed or replaced. This private-output operation is available only on
+Unix platforms where owner-only mode and directory sync can be enforced;
+unsupported platforms fail before output creation while retaining all other CLI
+capabilities. Machine and human stdout report creation without echoing the
+caller path.
+
 ## Privacy and public-content boundary
 
 High-level commands accept only HTTP and HTTPS URLs without userinfo. Persisted
@@ -147,7 +197,7 @@ personal absolute path.
 
 Machine-readable statuses include `OK`, `PARTIAL`, `INCONCLUSIVE`,
 `NEEDS_SETUP`, `INVALID_INPUT`, `ENGINE_FAILED`, `NAVIGATION_FAILED`,
-`PARSE_FAILED`, `INCOMPATIBLE_PROTOCOL`, and `INTERRUPTED`. JSON errors contain a
+`PARSE_FAILED`, `REPORT_FAILED`, `INCOMPATIBLE_PROTOCOL`, and `INTERRUPTED`. JSON errors contain a
 stable code, safe message, and remediation hint without credentials or raw
 query values.
 
@@ -172,7 +222,9 @@ can remove the Go build requirement without changing the command contract.
 
 Unit tests cover command parsing, JSON envelopes, URL sanitization, profile
 fingerprints, LHR parsing, median/MAD/IQR, comparison materiality, atomic output,
-and structured failures. Integration tests use a deterministic local HTTP page,
+locale routing, bilingual deterministic rendering, no-replace/offline escaping,
+and structured failures.
+Integration tests use a deterministic local HTTP page,
 a fake engine for failure/process cases, and the real locked Lighthouse engine
 when the required browser runtime is available.
 

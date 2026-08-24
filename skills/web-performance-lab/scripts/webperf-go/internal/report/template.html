@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="{{.Locale}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>{{.Title}}</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#d9deea; --panel:#fff; --canvas:#f3f5f9; --accent:#4056d6; --good:#087a55; --good-bg:#e8f7f0; --warn:#9a5b00; --warn-bg:#fff4d6; --bad:#b42318; --bad-bg:#feeceb; --neutral:#475467; --neutral-bg:#eef1f6; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--canvas); color:var(--ink); font:15px/1.5 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    code, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-wrap:anywhere; }
+    .page { width:min(1180px, calc(100% - 32px)); margin:0 auto; padding:40px 0 64px; }
+    .hero { padding:32px; border-radius:24px; background:linear-gradient(135deg,#192553,#3349b7); color:#fff; box-shadow:0 18px 48px rgba(29,41,92,.18); }
+    .eyebrow { margin:0 0 8px; letter-spacing:.12em; text-transform:uppercase; font-size:12px; font-weight:750; opacity:.78; }
+    h1 { margin:0; font-size:clamp(30px,5vw,52px); line-height:1.08; letter-spacing:-.035em; }
+    h2 { margin:0; font-size:24px; letter-spacing:-.02em; }
+    h3 { margin:0 0 14px; font-size:17px; }
+    p { margin:0; }
+    .hero-meta, .meta-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-top:28px; }
+    .hero-meta div, .meta-grid div { min-width:0; }
+    dt { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+    .hero dt { color:rgba(255,255,255,.7); }
+    dd { margin:5px 0 0; font-weight:650; overflow-wrap:anywhere; }
+    .badge { display:inline-flex; align-items:center; gap:7px; width:max-content; padding:7px 11px; border-radius:999px; font-size:12px; font-weight:800; letter-spacing:.04em; }
+    .badge.good { color:var(--good); background:var(--good-bg); }
+    .badge.warn { color:var(--warn); background:var(--warn-bg); }
+    .badge.bad { color:var(--bad); background:var(--bad-bg); }
+    .badge.neutral { color:var(--neutral); background:var(--neutral-bg); }
+    .badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+    .hero .badge { margin-top:20px; }
+    .notice { margin-top:18px; padding:14px 16px; border:1px solid #e9c46a; border-radius:13px; background:var(--warn-bg); color:#714600; font-weight:650; }
+    .section { margin-top:24px; padding:26px; border:1px solid var(--line); border-radius:20px; background:var(--panel); box-shadow:0 7px 24px rgba(30,42,76,.055); }
+    .section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:20px; }
+    .muted { color:var(--muted); }
+    .profile-nav { display:flex; flex-wrap:wrap; gap:8px; margin-top:18px; }
+    .profile-nav a { padding:8px 12px; border-radius:999px; background:#fff; color:var(--accent); text-decoration:none; font-weight:700; border:1px solid #cdd4f2; }
+    .metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:22px; }
+    .metric { padding:17px; border:1px solid var(--line); border-radius:16px; background:#fbfcff; min-width:0; }
+    .metric-name { min-height:44px; color:var(--muted); font-size:13px; font-weight:700; }
+    .metric-value { margin-top:4px; font-size:30px; line-height:1; font-weight:800; letter-spacing:-.03em; }
+    .distribution { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:16px; }
+    .distribution span { display:block; color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .distribution strong { display:block; margin-top:2px; font-size:13px; }
+    .plot { width:100%; height:31px; margin-top:12px; overflow:visible; }
+    .plot-line { stroke:#ccd3e4; stroke-width:2; }
+    .plot-median { stroke:var(--accent); stroke-width:1.4; stroke-dasharray:2 2; }
+    .plot-point { fill:#fff; stroke:var(--accent); stroke-width:1.8; }
+    .split { display:grid; grid-template-columns:1.15fr .85fr; gap:18px; margin-top:22px; }
+    .subpanel { padding:18px; border:1px solid var(--line); border-radius:16px; background:#fbfcff; min-width:0; }
+    .stack { display:grid; gap:10px; }
+    .row { display:flex; justify-content:space-between; gap:16px; align-items:baseline; padding:10px 0; border-bottom:1px solid #e7eaf1; }
+    .row:last-child { border-bottom:0; }
+    .row strong { text-align:right; }
+    progress { width:100%; height:8px; accent-color:var(--accent); }
+    table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+    th, td { padding:11px 10px; border-bottom:1px solid #e5e8ef; text-align:right; vertical-align:top; }
+    th:first-child, td:first-child { text-align:left; }
+    th { color:var(--muted); font-size:11px; letter-spacing:.04em; text-transform:uppercase; }
+    tbody tr:last-child td { border-bottom:0; }
+    .table-wrap { overflow-x:auto; }
+    .comparison-verdict { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+    .legend { display:flex; flex-wrap:wrap; gap:7px; margin-top:13px; }
+    .warning-list, .claim-list { margin:10px 0 0; padding-left:20px; }
+    .warning-list li, .claim-list li { margin:6px 0; }
+    details { margin-top:18px; border-top:1px solid var(--line); padding-top:16px; }
+    summary { cursor:pointer; color:var(--accent); font-weight:750; }
+    .protocol { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:16px; }
+    .flags { margin-top:12px; padding:13px; border-radius:11px; background:#eff2f8; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
+    .footer { margin-top:24px; color:var(--muted); text-align:center; font-size:12px; }
+    @media (max-width:860px) { .hero-meta,.meta-grid,.metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .split { grid-template-columns:1fr; } }
+    @media (max-width:560px) { .page { width:min(100% - 20px,1180px); padding-top:10px; } .hero,.section { padding:20px; border-radius:16px; } .hero-meta,.meta-grid,.metrics { grid-template-columns:1fr; } .section-head { display:block; } .section-head .badge { margin-top:10px; } }
+    @media print { body { background:#fff; } .page { width:100%; padding:0; } .hero { color:#000; background:#fff; border:2px solid #222; box-shadow:none; } .hero dt { color:#555; } .section { break-inside:avoid; box-shadow:none; } details { display:block; } details > summary { display:none; } details > * { display:block; } }
+  </style>
+</head>
+<body>{{$copy := .Messages}}
+  <div class="page">
+    <header class="hero">
+      <p class="eyebrow">{{$copy.HeroEyebrow}}</p>
+      <h1>{{.Title}}</h1>
+      <span class="badge {{statusToken .ReportClass}}">{{.ReportClass}}</span>
+      <dl class="hero-meta">
+        {{if .TargetURL}}<div><dt>{{$copy.Target}}</dt><dd class="mono">{{.TargetURL}}</dd></div>{{end}}
+        <div><dt>{{$copy.EvidenceStatus}}</dt><dd>{{.EvidenceStatus}}</dd></div>
+        <div><dt>{{$copy.MeasurementStart}}</dt><dd>{{dateTime .StartedAt}}</dd></div>
+        <div><dt>{{$copy.MeasurementFinish}}</dt><dd>{{dateTime .FinishedAt}}</dd></div>
+      </dl>
+      {{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+      {{if gt (len .Runs) 1}}
+      <nav class="profile-nav" aria-label="{{$copy.ReportSections}}">
+        {{range .Runs}}<a href="#{{.ID}}">{{if .Role}}{{.Role}} · {{end}}{{.Profile}}</a>{{end}}
+      </nav>
+      {{end}}
+    </header>
+
+    {{if .Comparison}}
+    <section class="section" aria-labelledby="comparison-heading">
+      <div class="section-head">
+        <div><p class="eyebrow muted">{{$copy.StrictAnalysis}}</p><h2 id="comparison-heading">{{$copy.ComparisonVerdict}}</h2></div>
+        <span class="badge {{classToken .Comparison.Overall}}">{{classLabel .Comparison.Overall}}</span>
+      </div>
+      <div class="legend" aria-label="{{$copy.PossibleClassifications}}">
+        <span class="badge good">{{classLabel "improvement"}}</span><span class="badge neutral">{{classLabel "no_material_change"}}</span><span class="badge bad">{{classLabel "regression"}}</span><span class="badge warn">{{classLabel "mixed"}}</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>{{$copy.Metric}}</th><th>{{$copy.BaselineMedian}}</th><th>{{$copy.CandidateMedian}}</th><th>{{$copy.Delta}}</th><th>{{$copy.MaterialityFloor}}</th><th>{{$copy.Classification}}</th></tr></thead>
+          <tbody>
+          {{range .Comparison.Metrics}}
+            <tr>
+              <td>{{.Label}}</td>
+              <td>{{metricValue .Key .Baseline.Median}}</td>
+              <td>{{metricValue .Key .Candidate.Median}}</td>
+              <td>{{metricDelta .Key .Delta}}</td>
+              <td>{{metricValue .Key .MaterialityFloor}}</td>
+              <td><span class="badge {{classToken .Classification}}">{{classLabel .Classification}}</span></td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {{end}}
+
+    {{range .Runs}}
+    {{$run := .}}
+    <section class="section" id="{{.ID}}" aria-labelledby="{{.ID}}-heading">
+      <div class="section-head">
+        <div><p class="eyebrow muted">{{if .Role}}{{.Role}} · {{end}}{{.FormFactor}} · {{.ThrottlingMethod}}</p><h2 id="{{.ID}}-heading">{{.Profile}}</h2></div>
+        <span class="badge {{statusToken .EvidenceStatus}}">{{.SuccessfulRuns}} / {{.RequestedRuns}} · {{.EvidenceStatus}}</span>
+      </div>
+      <dl class="meta-grid">
+        <div><dt>{{$copy.RequestedURL}}</dt><dd class="mono">{{.RequestedURL}}</dd></div>
+        <div><dt>{{$copy.FinalURL}}</dt><dd class="mono">{{.FinalURL}}</dd></div>
+        <div><dt>{{$copy.Started}}</dt><dd>{{dateTime .StartedAt}}</dd></div>
+        <div><dt>{{$copy.Finished}}</dt><dd>{{dateTime .FinishedAt}}</dd></div>
+      </dl>
+
+      <div class="metrics">
+      {{range .Metrics}}
+        {{$metric := .}}
+        <article class="metric">
+          <div class="metric-name">{{.Label}}</div>
+          <div class="metric-value">{{metricValue .Key .Distribution.Median}}</div>
+          <div class="distribution">
+            <div><span>{{$copy.Median}}</span><strong>{{metricValue .Key .Distribution.Median}}</strong></div>
+            <div><span>MAD</span><strong>{{metricValue .Key .Distribution.MAD}}</strong></div>
+            <div><span>IQR</span><strong>{{metricValue .Key .Distribution.IQR}}</strong></div>
+          </div>
+          <svg class="plot" viewBox="0 0 100 24" role="img" aria-label="{{distributionLabel .Label .Key .Distribution.Min .Distribution.Max}}">
+            <line class="plot-line" x1="5" y1="12" x2="95" y2="12"></line>
+            <line class="plot-median" x1="{{printf "%.2f" .MedianPosition}}" y1="3" x2="{{printf "%.2f" .MedianPosition}}" y2="21"></line>
+            {{range .Points}}<circle class="plot-point" cx="{{printf "%.2f" .Position}}" cy="12" r="3"><title>{{$copy.Run}} {{.Attempt}}: {{metricValue $metric.Key .Value}}</title></circle>{{end}}
+          </svg>
+          <p class="muted">{{$copy.Range}} {{metricValue .Key .Distribution.Min}} – {{metricValue .Key .Distribution.Max}}</p>
+        </article>
+      {{end}}
+      </div>
+
+      <div class="split">
+        <article class="subpanel">
+          <h3>{{$copy.LCPDiagnostic}} · {{$copy.RepresentativeRun}} {{.Representative.Attempt}}</h3>
+          <p class="muted">{{$copy.ClosestMedianLCP}}: {{metricValue "lcp" .Representative.LCP}}</p>
+          <p class="muted">{{$copy.SelectorWithheld}}</p>
+          {{if .Representative.LCPBreakdown}}
+          <div class="stack">
+            {{range .Representative.LCPBreakdown}}
+            <div><div class="row"><span>{{.Label}}</span><strong>{{metricValue "lcp" .Duration}}</strong></div><progress max="{{printf "%.3f" $run.Representative.LCP}}" value="{{printf "%.3f" .Duration}}"></progress></div>
+            {{end}}
+          </div>
+          {{else}}<p class="muted">{{$copy.NoLCPBreakdown}}</p>{{end}}
+        </article>
+        <article class="subpanel">
+          <h3>{{$copy.TopOpportunities}}</h3>
+          {{if .Representative.Opportunities}}
+          <div class="stack">{{range .Representative.Opportunities}}<div class="row"><span>{{.Label}}</span><strong>{{opportunityValue .}}</strong></div>{{end}}</div>
+          {{else}}<p class="muted">{{$copy.NoOpportunities}}</p>{{end}}
+          {{if .Representative.Signals}}
+          <h3 style="margin-top:20px">{{$copy.WorkloadSignals}}</h3>
+          <div class="stack">{{range .Representative.Signals}}<div class="row"><span>{{.Label}}</span><strong>{{signalValue .}}</strong></div>{{end}}</div>
+          {{end}}
+        </article>
+      </div>
+
+      <div class="split">
+        <article class="subpanel">
+          <h3>{{$copy.Warnings}}</h3>
+          {{if .Warnings}}<ul class="warning-list">{{range .Warnings}}<li>{{.}}</li>{{end}}</ul>{{else}}<p class="muted">{{$copy.NoWarnings}}</p>{{end}}
+        </article>
+        <article class="subpanel">
+          <h3>{{$copy.EvidenceInterpretation}}</h3>
+          <p>{{$copy.EvidenceInterpretationBody}}</p>
+        </article>
+      </div>
+
+      <div class="table-wrap" style="margin-top:22px">
+        <table>
+          <thead><tr><th>{{$copy.Run}}</th><th>{{$copy.Status}}</th><th>{{$copy.Score}}</th><th>FCP</th><th>LCP</th><th>{{$copy.SpeedIndex}}</th><th>TBT</th><th>CLS</th><th>{{$copy.Benchmark}}</th></tr></thead>
+          <tbody>
+          {{range .Attempts}}
+            <tr><td>#{{.Number}}</td><td>{{.Status}}</td>{{if .Sample}}<td>{{metricValue "performanceScore" .Sample.PerformanceScore}}</td><td>{{metricValue "fcp" .Sample.FCP}}</td><td>{{metricValue "lcp" .Sample.LCP}}</td><td>{{metricValue "speedIndex" .Sample.SpeedIndex}}</td><td>{{metricValue "tbt" .Sample.TBT}}</td><td>{{metricValue "cls" .Sample.CLS}}</td><td>{{printf "%.1f" .Sample.BenchmarkIndex}}</td>{{else}}<td colspan="7">{{$copy.NoSuccessfulMetric}}</td>{{end}}</tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      <details>
+        <summary>{{$copy.ProtocolAndRuntime}}</summary>
+        <dl class="protocol">
+          <div><dt>{{$copy.ProtocolFingerprint}}</dt><dd class="mono">{{.Protocol.Fingerprint}}</dd></div>
+          <div><dt>Lighthouse</dt><dd>{{.Protocol.LighthouseVersion}}</dd></div>
+          <div><dt>Node.js</dt><dd>{{.Protocol.NodeVersion}}</dd></div>
+          <div><dt>Chrome</dt><dd>{{.Protocol.ChromeVersion}}</dd></div>
+          <div><dt>{{$copy.Platform}}</dt><dd>{{.Protocol.OS}} / {{.Protocol.Arch}}</dd></div>
+        </dl>
+        <p class="eyebrow muted" style="margin-top:16px">{{$copy.ResolvedProfileFlags}}</p>
+        <div class="flags">{{range .Protocol.ResolvedFlags}}{{.}}
+{{end}}</div>
+        <p class="eyebrow muted" style="margin-top:16px">{{$copy.ExecutorRuntimeFlags}}</p>
+        <div class="flags">{{range .Protocol.RuntimeFlags}}{{.}}
+{{end}}</div>
+      </details>
+    </section>
+    {{end}}
+
+    <section class="section" aria-labelledby="cannot-claim-heading">
+      <p class="eyebrow muted">{{$copy.ScopeBoundary}}</p>
+      <h2 id="cannot-claim-heading">{{$copy.CannotClaim}}</h2>
+      <ul class="claim-list">{{range .CannotClaims}}<li>{{.}}</li>{{end}}</ul>
+    </section>
+
+    <p class="footer">{{$copy.Footer}}</p>
+  </div>
+</body>
+</html>

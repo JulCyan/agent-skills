@@ -108,6 +108,65 @@ query value、fragment、credential 或个人绝对路径，且 `--json` stdout 
   list
 - **THEN** 命令不依赖 provider repository path 且输出与源目录调用一致
 
+### Requirement: HTML 报告必须显式、离线且来自已验证 evidence
+系统 SHALL 只在调用者显式执行 `report` 命令时生成 HTML；`collect`、`inspect` 与
+`compare` 不得隐式生成或询问。报告 SHALL 在完整验证 bundle 后确定性渲染为一份
+standalone HTML，不启动 Lighthouse、不写入 bundle、不加载 script 或外部资源，也
+不得覆盖现有文件或 symlink。
+
+#### Scenario: 默认测试链路完成
+- **WHEN** 用户只执行 `collect`、`inspect` 或 `compare`
+- **THEN** 系统输出终端或 JSON 结果并结束，不创建 HTML
+
+#### Scenario: 显式生成单站报告
+- **WHEN** 用户对一个完整 `OK` aggregate 执行 `report --run ... --out <new.html>`
+- **THEN** 系统生成权限为 `0600` 的单份离线 HTML，包含官方 score/指标分布、逐次
+  样本、warnings、代表 LCP 诊断、protocol fingerprint 与 `Cannot Claim`
+
+#### Scenario: 显式选择报告语言
+- **WHEN** 调用者使用 `--locale en` 或 `--locale zh-CN` 生成报告
+- **THEN** 系统只本地化工具自有的人类展示文案，一份文件只使用一种语言；指标缩写、
+  profile、evidence status、report class、protocol fingerprint 与成功 JSON 保持规范值，
+  同一 evidence 与 locale 必须产生相同 bytes
+
+#### Scenario: 未指定或不支持的 Locale
+- **WHEN** 调用者省略 `--locale`，或传入 `en`、`zh-CN` 以外的值
+- **THEN** 省略时确定性使用 `en` 且不读取 host locale；非法值在读取 evidence 或创建
+  输出前返回 `INVALID_INPUT/unsupported_locale`
+
+#### Scenario: 已验证的 PARTIAL aggregate
+- **WHEN** 用户显式为 hash、ledger 与 aggregate 均通过验证的 `PARTIAL` bundle 生成
+  单站报告
+- **THEN** 系统允许生成但醒目标记 `DIAGNOSTIC ONLY` 与非 release acceptance；
+  comparison report 仍拒绝该 bundle
+
+#### Scenario: Evidence 损坏或输出已存在
+- **WHEN** bundle 校验失败、aggregate 不存在，或 HTML 输出路径已有任意 entry
+- **THEN** 系统返回结构化非零结果，不生成、覆盖或修改报告与 evidence
+
+#### Scenario: 同一站点含多个 Profile
+- **WHEN** 调用者重复传入不含 query 的同一 requested URL 的不同 profile bundle
+- **THEN** 系统生成一份含独立 profile 区块的 HTML，不计算跨 profile delta；重复
+  profile 或不同 requested URL 则拒绝
+
+#### Scenario: 含 Query 的多个 Profile
+- **WHEN** 调用者为含 query 的 requested URL 重复传入多个 profile bundle
+- **THEN** 系统因持久化 query value 已脱敏而返回 `ambiguous_target`，不生成 HTML
+
+#### Scenario: 原子输出与路径隐私
+- **WHEN** 输出父目录是 bundle 的大小写 alias、symlink、在提交期间被替换或移动，或写入中途失败
+- **THEN** 系统 fail closed，不在 bundle 或最终路径留下 partial HTML；成功 JSON 只返回
+  `outputCreated`、`reportClass`、`evidenceStatus` 与 profiles，不回显 caller 绝对路径
+
+#### Scenario: 输出清理失败
+- **WHEN** 原子提交回滚时无法删除已校验 inode 或同步输出目录
+- **THEN** 系统返回 `REPORT_FAILED/report_cleanup_failed` 而非 `INVALID_INPUT`，不声称报告已创建
+
+#### Scenario: 不支持私有输出的平台
+- **WHEN** 当前平台不能实施 owner-only `0600` 与 directory sync 合同
+- **THEN** `report` 在创建任何文件前返回 `REPORT_FAILED/report_platform_unsupported`；
+  `collect`、`inspect` 与 `compare` 仍按原合同运行
+
 ### Requirement: 公开仓库只包含合成测试内容
 系统 SHALL 使用 `example.test` 与本地 deterministic server 作为 fixture；外部验收
 URL、原始 LHR、运行 evidence、cookie、credential 与组织特定标识不得进入 tracked
