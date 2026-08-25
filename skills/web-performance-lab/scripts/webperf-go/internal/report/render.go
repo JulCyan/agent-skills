@@ -133,19 +133,51 @@ func WriteNew(outputPath string, contents []byte, bundlePaths []string) error {
 	}
 	writeErr := writeReportTemporary(file, contents)
 	writtenInfo, writtenStatErr := file.Stat()
-	closeErr := file.Close()
 	if writeErr != nil {
-		return failBeforeCommit(fmt.Errorf("write temporary report: %w", writeErr))
+		return failBeforeCommit(errors.Join(
+			fmt.Errorf("write temporary report: %w", writeErr),
+			file.Close(),
+		))
 	}
 	if writtenStatErr != nil {
-		return failBeforeCommit(fmt.Errorf("stat temporary report: %w", writtenStatErr))
-	}
-	if closeErr != nil {
-		return failBeforeCommit(fmt.Errorf("close temporary report: %w", closeErr))
+		return failBeforeCommit(errors.Join(
+			fmt.Errorf("stat temporary report: %w", writtenStatErr),
+			file.Close(),
+		))
 	}
 	if !os.SameFile(temporaryInfo, writtenInfo) || !validPrivateReportFile(writtenInfo) {
-		return failBeforeCommit(errors.New("temporary report identity is invalid"))
+		return failBeforeCommit(errors.Join(
+			errors.New("temporary report identity is invalid"),
+			file.Close(),
+		))
 	}
+	identityGuard, guardOpenErr := root.Open(temporaryName)
+	if guardOpenErr != nil {
+		return failBeforeCommit(errors.Join(
+			fmt.Errorf("open temporary report identity guard: %w", guardOpenErr),
+			file.Close(),
+		))
+	}
+	guardInfo, guardStatErr := identityGuard.Stat()
+	closeErr := file.Close()
+	if guardStatErr != nil || !os.SameFile(temporaryInfo, guardInfo) {
+		return failBeforeCommit(errors.Join(
+			errors.New("temporary report identity guard is invalid"),
+			guardStatErr,
+			closeErr,
+			identityGuard.Close(),
+		))
+	}
+	if closeErr != nil {
+		return failBeforeCommit(errors.Join(
+			fmt.Errorf("close temporary report: %w", closeErr),
+			identityGuard.Close(),
+		))
+	}
+	// Keep the original inode referenced until the final path check. Otherwise a
+	// Unix filesystem can immediately reuse its inode after both links are
+	// removed, causing os.SameFile to accept a foreign replacement.
+	defer identityGuard.Close()
 	boundTemporaryInfo, err := root.Lstat(temporaryName)
 	if err != nil || !os.SameFile(temporaryInfo, boundTemporaryInfo) {
 		return failBeforeCommit(errors.New("temporary report changed before commit"))
