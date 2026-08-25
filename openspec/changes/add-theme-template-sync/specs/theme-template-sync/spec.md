@@ -21,14 +21,21 @@ template 同步能力。
 - **WHEN** 未提供显式 binary 且系统没有可用 Go，也没有固定 Release asset
 - **THEN** launcher 返回结构化 `NEEDS_SETUP`，且不得尝试下载或执行 `latest`
 
+#### Scenario: Bundled source 返回非零结果
+
+- **WHEN** launcher 临时构建 bundled Go executor，应用返回 exit 2、3 或 4
+- **THEN** launcher 原样返回该 exit code 和一次 stdout/stderr 结果，不暴露 `go run` wrapper 错误
+
 ### Requirement: Template 入口必须通用于 Shopify JSON templates
 
-系统 SHALL 通过 `--template` 接受 page、product、collection 与其它合法 template key，
-并只解析为单个 `templates/<key>.json` asset；能力模型不得限定为 Page。
+系统 SHALL 通过 `--template` 接受 page、product、collection、customer/metaobject 子目录与
+其它合法 template key，并只解析为单个 `templates/<key>.json` asset；能力模型不得限定为
+Page。
 
 #### Scenario: 解析不同资源类型
 
-- **WHEN** 用户分别传入 `page.example`、`product.lp4` 与 `collection.example`
+- **WHEN** 用户分别传入 `page.example`、`product.lp4`、`collection.example` 与
+  `customers/account`
 - **THEN** 系统分别解析为对应 `templates/*.json` 且使用相同同步流程
 
 #### Scenario: 使用旧 Page 兼容入口
@@ -43,7 +50,8 @@ template 同步能力。
 
 #### Scenario: Template 参数尝试路径逃逸
 
-- **WHEN** template 包含 slash、backslash、绝对路径、`..` 或非 JSON asset 表达
+- **WHEN** template 包含超过一个子目录层级、空 segment、backslash、绝对路径、`..`、
+  重复 `templates/`/`.json` 或非 JSON asset 表达
 - **THEN** 系统在 adapter 调用前拒绝
 
 ### Requirement: Source 与 targets 必须显式且确定地解析
@@ -60,6 +68,11 @@ template 同步能力。
 
 - **WHEN** 用户按顺序提供多个 targets
 - **THEN** plan、evidence 与后续串行执行均保持该顺序，不增加隐式目标
+
+#### Scenario: 同一 target 使用不同别名重复提供
+
+- **WHEN** 两个 target refs 解析到 canonical store 和 theme ID 均相同的主题
+- **THEN** 系统在 plan 阶段拒绝重复 target，不执行任何写入
 
 ### Requirement: Live target 与主题生命周期操作必须被禁止
 
@@ -91,6 +104,11 @@ template 同步能力。
 
 - **WHEN** root object 后还有第二个值、注释外垃圾或 parser 不支持的正文语法
 - **THEN** 系统拒绝输入而不是静默截断
+
+#### Scenario: JSON object 含重复 key
+
+- **WHEN** template root 或任意嵌套 object 重复出现同名 key
+- **THEN** parser 明确拒绝，而不是采用 last-wins 后丢失可见内容
 
 ### Requirement: Template 核心结构必须在写入前验证
 
@@ -184,6 +202,11 @@ diff，并明确报告 Section added/removed/changed keys。
 - **WHEN** target 与 planned semantic document 相同但空白、object key 顺序或头部注释不同
 - **THEN** 系统判定为 `NO_OP` 且 write call count 为零
 
+#### Scenario: Container 被 scalar 或 null 替换
+
+- **WHEN** object 或 array 在 planned 中被 scalar、`null` 或不同 container type 替换
+- **THEN** diff 同时报告该路径 changed 与所有消失后代 removed，使 removal gate 可阻断
+
 ### Requirement: Removed 内容必须显式授权
 
 系统 SHALL 默认允许展示含 removed 的 plan/diff，但 SHALL 阻断 execute；只有 plan 与
@@ -222,7 +245,9 @@ transform、diff、removed gate 与 before hash 验证；全部通过后才按�
 #### Scenario: 后序 target preflight 失败
 
 - **WHEN** 第一个 target 可应用但后序 target 在解析或安全检查中失败
-- **THEN** 整个 execute 在写入前失败，所有 targets 的 write call count 为零
+- **THEN** 整个 execute 在写入前失败，失败 target 标记 `PREFLIGHT_FAILED`，其后
+  `READY` targets 标记 `SKIPPED_AFTER_FAILURE`、`NO_OP` targets 保持 `NO_OP`，所有
+  targets 的 write call count 为零
 
 #### Scenario: 多目标成功执行
 
@@ -244,17 +269,61 @@ canonical hash；readback 成功前不得写入下一个 target。
 - **WHEN** 写入后的 canonical hash 与 planned hash 不同
 - **THEN** target 标记 `READBACK_MISMATCH`，系统停止后续写入并返回非零 exit
 
+#### Scenario: Readback 无法取得或解析
+
+- **WHEN** write 返回后 pull 失败、readback JSON 无效或 canonical 审计本身失败
+- **THEN** target 标记 `READBACK_FAILED` 而非 `READBACK_MISMATCH`，系统停止后续写入
+
+#### Scenario: Push 成功后本地 cleanup 失败
+
+- **WHEN** Shopify CLI 已接受 push，但 adapter 无法清理本地临时目录
+- **THEN** 系统仍立即 readback；匹配时 target 为 `APPLIED`，overall 为
+  `PARTIAL` 且 failure kind 为 `EVIDENCE_FAILED`
+
 ### Requirement: 结果必须区分失败、部分成功与读回不一致
 
-系统 SHALL 以 target 状态 `NO_OP`、`READY`、`APPLIED`、`WRITE_FAILED`、
-`READBACK_MISMATCH`、`SKIPPED_AFTER_FAILURE` 和整体状态 `NO_OP`、`PLANNED`、
-`APPLIED`、`FAILED`、`READBACK_MISMATCH`、`PARTIAL` 解释结果。
+系统 SHALL 以 target 状态 `NO_OP`、`READY`、`PREFLIGHT_FAILED`、
+`WRITE_IN_PROGRESS`、`READBACK_IN_PROGRESS`、`APPLIED`、`WRITE_FAILED`、
+`READBACK_FAILED`、`READBACK_MISMATCH`、`EVIDENCE_FAILED`、
+`SKIPPED_AFTER_FAILURE` 和整体状态 `NO_OP`、`PLANNED`、`APPLIED`、`FAILED`、
+`READBACK_MISMATCH`、`PARTIAL` 解释终态；`EXECUTING` 仅为 manifest nonterminal
+checkpoint。
+
+#### Scenario: 进程停在 mutation 边界
+
+- **WHEN** manifest 已原子记录 write/readback intent 后进程中断并停在 `EXECUTING`
+- **THEN** 远端结果视为 unknown，同一 run 在 adapter 调用前拒绝重入，恢复必须创建新 plan
+
+#### Scenario: 同一 plan 被并发 apply
+
+- **WHEN** 一个 preview 或 execute 已持有 run-scoped apply lease，第二个 preview 或 execute
+  指向同一 plan
+- **THEN** 第二个 apply 在读取 plan/manifest 与调用 adapter 前失败，不覆盖第一个 apply 的
+  manifest；每次远端 write 的最大并发仍为一
+
+#### Scenario: Apply lease 无法安全释放
+
+- **WHEN** apply 尚未形成 mutation intent，但 lease cleanup 失败或状态不确定
+- **THEN** result fail closed，lease 保留，后续同一 run 在 adapter 调用前拒绝，恢复必须创建
+  新 plan；failure kind 为 `EVIDENCE_FAILED` 且 exit code 为 3
+
+#### Scenario: 只读阶段被取消
+
+- **WHEN** plan、apply preview 或 execute 的全目标只读 preflight 收到 context cancellation
+- **THEN** 整体状态为 `FAILED`、failure kind 为 `INTERRUPTED`、exit code 为 2，且 write call
+  count 为零
 
 #### Scenario: 中途写入失败
 
 - **WHEN** 至少一个 target 已完成 canonical readback，后续 target 写入失败
 - **THEN** 整体状态为 `PARTIAL`，失败 target 为 `WRITE_FAILED`，剩余 targets 为
-  `SKIPPED_AFTER_FAILURE`
+  `SKIPPED_AFTER_FAILURE`；剩余 no-op targets 保持 `NO_OP`
+
+#### Scenario: 第一次写入即失败
+
+- **WHEN** 没有 target 已确认 applied，首个 target write 返回失败
+- **THEN** 整体状态为 `FAILED`，失败 target 为 `WRITE_FAILED`，剩余 targets 为
+  `SKIPPED_AFTER_FAILURE`，剩余 no-op targets 保持 `NO_OP`，exit code 为 3
 
 #### Scenario: 第一次写入即 readback mismatch
 
@@ -266,26 +335,63 @@ canonical hash；readback 成功前不得写入下一个 target。
 - **WHEN** 至少一个 target 已确认 applied，后续 target readback 不一致
 - **THEN** 整体状态为 `PARTIAL`，manifest failure kind 为 `READBACK_MISMATCH`
 
+#### Scenario: 重新 seal 矛盾的终态
+
+- **WHEN** manifest 被重新计算有效 SHA，但 overall status、APPLIED count、失败 target、failure
+  kind 或 `SKIPPED_AFTER_FAILURE` 顺序彼此矛盾
+- **THEN** plan-bound manifest validation 与审计加载都拒绝该 manifest，不把 self hash 当作完整
+  终态 authority
+
 ### Requirement: 运行 evidence 必须位于消费项目并可审计
 
 系统 SHALL 默认在调用者 cwd 的 `.runtime/theme-template-sync/<run-id>` 保存 source
-before、每 target before/planned/diff/after/failure 与 manifest；不得向 Skill 安装目录、
-provider 仓库或真实项目源码目录写 evidence。
+before、每 target before/planned/diff/after/failure 与 manifest；artifact 按已到达阶段生成，
+成功 plan 才保证完整 plan/source/target dry-run evidence。不得向 Skill 安装目录、provider
+仓库或真实项目源码目录写 evidence。
 
 #### Scenario: 从任意 cwd 运行已安装 Skill
 
 - **WHEN** 用户在消费项目 cwd 调用已安装 Skill
 - **THEN** 默认 evidence 位于该 cwd 的 runtime root，launcher cwd 不发生改变
 
+#### Scenario: Apply 指向不存在的 plan
+
+- **WHEN** `apply --plan` 指向调用者 cwd 内不存在或错拼的 run root
+- **THEN** 系统在 adapter 调用前返回 plan integrity failure，且不创建该路径或任何父目录
+
 #### Scenario: 写入后失败
 
 - **WHEN** target write、readback 或 canonical compare 失败
 - **THEN** manifest 和对应 failure/after evidence 记录已知事实、状态与 hash，且不包含凭据
 
+#### Scenario: Plan authority 无法持久化
+
+- **WHEN** run root 已保留，但 `plan.json` 或成功 plan 的 manifest 无法原子落盘
+- **THEN** result 为 plan integrity failure，并保留所有已知 run ID、plan path/SHA、evidence
+  root 与 targets；系统尽力写 failure manifest，且不丢失 primary persistence failure
+
 #### Scenario: Evidence path 试图逃逸
 
 - **WHEN** run ID、template、target label 或 symlink 试图让输出落到 evidence root 外
 - **THEN** 系统 fail closed，且 root 外文件保持不变
+
+#### Scenario: Plan 或 manifest authority 被修改
+
+- **WHEN** plan/manifest 的 SHA、run ID、template、scope、allow-remove、target 顺序、identity、
+  content hash、diff/status 派生值或 preview binding 任一不一致
+- **THEN** 系统在任何 adapter 调用前以 plan integrity 失败，且不覆盖已有 mutation evidence
+
+#### Scenario: Plan 或 manifest 增加未知/重复字段
+
+- **WHEN** plan/manifest 任意层级包含 schema 未声明字段或 duplicate object key，即使已知字段
+  解码后的 SHA 仍可匹配
+- **THEN** strict decoder 在任何 adapter 调用前拒绝，不得忽略文件中的可见内容
+
+#### Scenario: Failure evidence 自身写入失败
+
+- **WHEN** primary operation 已失败，随后 target failure artifact 或终态 manifest 无法持久化
+- **THEN** primary failure kind 保留，但 result message 与仍可写 manifest 明确报告 secondary
+  evidence persistence failure
 
 ### Requirement: Production adapter 不得依赖项目秘密或 shell 拼接
 
@@ -297,6 +403,13 @@ Skill 不读取 `.env`、token、cookie、个人路径或业务 stores config，
 
 - **WHEN** 输入包含 shell metacharacters
 - **THEN** adapter 将其作为单独参数处理或在验证阶段拒绝，不得产生额外 shell command
+
+#### Scenario: 环境或 stderr 包含敏感形状内容
+
+- **WHEN** 调用环境包含 `SHOPIFY_FLAG_*`，或 CLI stderr 包含 access token、authorization
+  bearer/basic/digest 多参数 header、含多个分号分隔值的 `Cookie`/`Set-Cookie` header、
+  password 或 secret
+- **THEN** adapter 移除行为覆盖变量，仅传播有界脱敏诊断，且不把原始 stderr 写 evidence
 
 #### Scenario: 自动化测试运行
 

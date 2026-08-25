@@ -6,17 +6,20 @@ contains its own instructions, references, launcher, implementation, and tests.
 
 Status: **Public preview**
 
-## Available Skill
+## Available Skills
 
 - `shopify-media-sync` — plans, previews, executes, inspects, and safely
   recovers Shopify Files media synchronization.
+- `theme-template-sync` — plans, previews, and executes scoped Shopify JSON
+  template synchronization with canonical readback.
 
 ## Install
 
-Install the Skill into a project with the current Skills CLI:
+Install one Skill into a project with the current Skills CLI:
 
 ```bash
 npx skills add JulCyan/agent-skills --skill shopify-media-sync --copy
+npx skills add JulCyan/agent-skills --skill theme-template-sync --copy
 ```
 
 List the Skills exposed by the repository:
@@ -36,7 +39,7 @@ Skills rather than consuming them.
 
 ## Runtime
 
-The installed Skill selects an executor in this order:
+`shopify-media-sync` selects an executor in this order:
 
 1. an explicit trusted `SHOPIFY_MEDIA_SYNC_BINARY`;
 2. a fixed Release asset whose SHA-256 matches `runtime.json`;
@@ -47,6 +50,12 @@ The current preview has neither a binary Release nor an explicit trusted
 binary, so systems without Go fail closed.
 Optional Lark/Feishu inputs require `lark-cli`; local CSV, XLSX, JSON, zip, and
 directory inputs do not.
+
+`theme-template-sync` uses an explicit trusted `THEME_TEMPLATE_SYNC_BINARY`
+when configured; otherwise its POSIX launcher builds the bundled Go module with
+the local toolchain. It never downloads an executor. Real remote operations
+also require an authenticated Shopify CLI session; repository tests use only
+fake/local adapters.
 
 ## Safety
 
@@ -64,8 +73,7 @@ directory inputs do not.
 Requirements:
 
 - Node.js 22.20 or newer (required by the pinned Skills CLI acceptance suite)
-- the Go version declared in
-  `skills/shopify-media-sync/scripts/media-sync-go/go.mod`
+- the Go versions declared by both bundled modules under `skills/`
 
 Run all checks:
 

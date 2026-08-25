@@ -8,11 +8,12 @@ The acceptance suite checks these boundaries:
 - the complete Go test suite passes;
 - the POSIX wrapper passes shell syntax validation;
 - every OpenSpec change passes strict validation;
-- `npx skills@1.5.21 --list` finds exactly `shopify-media-sync`;
-- a tracked Git archive copy-installs exactly one Skill into a disposable
-  consumer;
-- the installed wrapper runs `--help`, JSON `doctor`, `plan`, and `inspect`
-  outside the repository.
+- `npx skills@1.5.21 --list` finds exactly `shopify-media-sync` and
+  `theme-template-sync`;
+- a tracked Git archive copy-installs exactly two Skills into a disposable
+  consumer and verifies both lock hashes;
+- both installed wrappers run `--help` outside the repository; the media Skill
+  additionally runs synthetic JSON `doctor`, `plan`, and `inspect` checks.
 
 Run the full acceptance entrypoint:
 

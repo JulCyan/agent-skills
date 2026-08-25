@@ -9,8 +9,8 @@
   "scripts": {
     "scan:public": "node scripts/scan-public.mjs",
     "test:node": "node --test scripts/tests/*.test.mjs",
-    "test:go": "cd skills/shopify-media-sync/scripts/media-sync-go && go test ./...",
-    "test:shell": "sh -n skills/shopify-media-sync/scripts/shopify-media-sync.sh",
+    "test:go": "cd skills/shopify-media-sync/scripts/media-sync-go && go test ./... && cd ../../../theme-template-sync/scripts/template-sync-go && go test ./...",
+    "test:shell": "sh -n skills/shopify-media-sync/scripts/shopify-media-sync.sh && sh -n skills/theme-template-sync/scripts/theme-template-sync.sh",
     "test:openspec": "OPENSPEC_TELEMETRY=0 npx --yes @fission-ai/openspec@1.7.0 validate --all --strict --no-interactive",
     "test": "npm run scan:public && npm run test:node && npm run test:go && npm run test:shell && npm run test:openspec"
   }

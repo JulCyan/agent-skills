@@ -12,7 +12,7 @@ To check an installed copy from a clone of this repository:
 ```bash
 node scripts/verify-installed-skill.mjs \
   --project <consumer-project> \
-  --skill shopify-media-sync
+  --skill <skill-name>
 ```
 
 The verifier returns `MATCH`, `DRIFT`, or `NEEDS_SETUP`. Fixes are made here,
