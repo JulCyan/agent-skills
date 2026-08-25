@@ -97,7 +97,7 @@ func TestCreateRejectsTargetReplacedAfterClaimIdentity(t *testing.T) {
 	}
 }
 
-func TestCreateDoesNotWriteMarkerToTargetReplacedBeforeChildBinding(t *testing.T) {
+func TestCreateDoesNotWriteMarkerToTargetReplacedAfterChildBinding(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "run")
 	originalAfterInitialClaimLstat := afterInitialClaimLstat
 	afterInitialClaimLstat = func(parent *os.Root, name string) {

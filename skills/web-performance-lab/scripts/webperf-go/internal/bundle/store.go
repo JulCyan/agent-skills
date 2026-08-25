@@ -884,21 +884,28 @@ func claimBundle(parent *os.Root, base string) (os.FileInfo, *os.Root, bool, err
 		}
 		return nil, nil, false, fmt.Errorf("claim evidence bundle directory: %w", err)
 	}
-	claim, err := parent.Lstat(base)
-	if err != nil || claim.Mode()&os.ModeSymlink != 0 || !claim.IsDir() {
+	root, err := openChildRoot(parent, base)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("open evidence bundle claim: %w", err)
+	}
+	claim, claimErr := root.Stat(".")
+	bound, boundErr := parent.Lstat(base)
+	if claimErr != nil || boundErr != nil || !claim.IsDir() || bound.Mode()&os.ModeSymlink != 0 || !bound.IsDir() || !os.SameFile(claim, bound) {
+		_ = root.Close()
 		return nil, nil, false, errors.New("evidence bundle claim changed before binding")
 	}
 	afterInitialClaimLstat(parent, base)
-	root, err := openBoundChild(parent, base, claim)
-	if err != nil {
-		return nil, nil, false, err
+	bound, err = parent.Lstat(base)
+	if err != nil || bound.Mode()&os.ModeSymlink != 0 || !bound.IsDir() || !os.SameFile(claim, bound) {
+		_ = root.Close()
+		return nil, nil, false, errors.New("evidence bundle claim changed before binding")
 	}
 	if err := writeJSON(root, claimFile, record); err != nil {
 		_ = root.Close()
 		return nil, nil, false, fmt.Errorf("write evidence claim marker: %w", err)
 	}
 	afterClaimIdentity(parent, base)
-	bound, err := parent.Lstat(base)
+	bound, err = parent.Lstat(base)
 	if err != nil || !os.SameFile(claim, bound) {
 		_ = root.Close()
 		return nil, nil, false, errors.New("evidence bundle claim changed before binding")
