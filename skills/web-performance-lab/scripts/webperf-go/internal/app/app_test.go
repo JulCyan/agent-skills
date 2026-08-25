@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestCollectRequiresExplicitProfile(t *testing.T) {
 	if report.Error == nil || report.Error.Code != "profile_required" {
 		t.Fatalf("error=%+v", report.Error)
 	}
-	if got := availableProfileNames(t, report.Data); !equalStrings(got, []string{"desktop-observed-v1", "desktop-lab-v1", "mobile-lab-v1"}) {
+	if got := availableProfileNames(t, report.Data); !slices.Equal(got, []string{"desktop-observed-v1", "desktop-lab-v1", "mobile-lab-v1"}) {
 		t.Fatalf("available profiles=%v", got)
 	}
 }
@@ -908,7 +909,7 @@ func TestReportRejectsOutputInsideInputEvidenceBundle(t *testing.T) {
 	if _, err := os.Lstat(out); !os.IsNotExist(err) {
 		t.Fatalf("inside-bundle output exists: %v", err)
 	}
-	if got := directoryEntries(t, directory); !equalStrings(got, before) {
+	if got := directoryEntries(t, directory); !slices.Equal(got, before) {
 		t.Fatalf("bundle changed: before=%v after=%v", before, got)
 	}
 }
@@ -976,10 +977,10 @@ func TestInspectAndCompareDoNotCreateHTMLArtifacts(t *testing.T) {
 	if code, envelope := runJSON(t, "--json", "compare", "--baseline", baseline, "--candidate", candidate); code != contract.ExitOK || envelope.Status != contract.OK {
 		t.Fatalf("compare code=%d report=%+v", code, envelope)
 	}
-	if got := directoryEntries(t, baseline); !equalStrings(got, beforeBaseline) {
+	if got := directoryEntries(t, baseline); !slices.Equal(got, beforeBaseline) {
 		t.Fatalf("inspect changed baseline bundle: before=%v after=%v", beforeBaseline, got)
 	}
-	if got := directoryEntries(t, candidate); !equalStrings(got, beforeCandidate) {
+	if got := directoryEntries(t, candidate); !slices.Equal(got, beforeCandidate) {
 		t.Fatalf("compare changed candidate bundle: before=%v after=%v", beforeCandidate, got)
 	}
 }
@@ -1008,7 +1009,7 @@ func TestRawForwardsOnlySeparatedArgumentsThroughInjectedLockedRunner(t *testing
 		Engine:    readyStatusEngine{},
 		RawRunner: runner,
 	})
-	if code != 23 || !equalStrings(runner.args, []string{"--output=json", "https://example.test"}) {
+	if code != 23 || !slices.Equal(runner.args, []string{"--output=json", "https://example.test"}) {
 		t.Fatalf("code=%d args=%v", code, runner.args)
 	}
 	if !strings.Contains(stdout.String(), "official stdout") || !strings.Contains(stderr.String(), "official stderr") || !strings.Contains(stderr.String(), "does not use profiles") {
@@ -1319,16 +1320,4 @@ func availableProfileNames(t *testing.T, data any) []string {
 		names[i] = item.Name
 	}
 	return names
-}
-
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
 }

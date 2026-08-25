@@ -349,19 +349,11 @@ func localizedLCPPhaseLabel(id string) string {
 
 func localizedOpportunityLabel(id string) string {
 	labels := map[string]string{
-		"efficient-animated-content": "使用高效的动画内容",
-		"modern-image-formats":       "提供现代图片格式",
-		"offscreen-images":           "延迟加载屏外图片",
-		"render-blocking-insight":    "消除阻塞渲染的资源",
-		"render-blocking-resources":  "消除阻塞渲染的资源",
-		"server-response-time":       "缩短初始服务器响应时间",
-		"unminified-css":             "压缩 CSS",
-		"unminified-javascript":      "压缩 JavaScript",
-		"unused-css-rules":           "减少未使用的 CSS",
-		"unused-javascript":          "减少未使用的 JavaScript",
-		"uses-optimized-images":      "高效编码图片",
-		"uses-responsive-images":     "适当调整图片尺寸",
-		"uses-text-compression":      "启用文本压缩",
+		"server-response-time":  "缩短初始服务器响应时间",
+		"unminified-css":        "压缩 CSS",
+		"unminified-javascript": "压缩 JavaScript",
+		"unused-css-rules":      "减少未使用的 CSS",
+		"unused-javascript":     "减少未使用的 JavaScript",
 	}
 	if label, ok := labels[id]; ok {
 		return label

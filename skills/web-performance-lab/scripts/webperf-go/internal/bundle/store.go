@@ -54,8 +54,8 @@ var (
 	afterArtifactParentCheck = func(root *os.Root, artifact Artifact) {}
 )
 
-// Store is an evidence bundle rooted at Path. Creation never replaces an
-// existing filesystem entry, including an existing symlink.
+// Store is an evidence bundle rooted at the requested path. Creation never
+// replaces an existing filesystem entry, including an existing symlink.
 type Store struct {
 	path      string
 	rootInfo  os.FileInfo
@@ -149,9 +149,6 @@ func Open(target string) (*Store, error) {
 	}
 	return &Store{path: target, rootInfo: info, finalized: finalManifest, manifest: manifest, protocol: protocol}, nil
 }
-
-// Path returns the root directory of this bundle.
-func (s *Store) Path() string { return s.path }
 
 // Manifest returns a copy of the run-level metadata.
 func (s *Store) Manifest() Manifest { return cloneManifest(s.manifest) }

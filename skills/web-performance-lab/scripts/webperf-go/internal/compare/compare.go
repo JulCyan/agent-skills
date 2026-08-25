@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/bundle"
@@ -26,7 +27,6 @@ const (
 	NoMaterialChange Classification = "no_material_change"
 	Regression       Classification = "regression"
 	Mixed            Classification = "mixed"
-	Inconclusive     Classification = "inconclusive"
 )
 
 // Metric holds one independently evaluated Lighthouse result distribution.
@@ -256,10 +256,10 @@ func compatibleProtocols(baseline, candidate bundle.Protocol) error {
 	if baseline.ThrottlingMethod != candidate.ThrottlingMethod {
 		fields = append(fields, "throttlingMethod")
 	}
-	if !equalStrings(baseline.ResolvedFlags, candidate.ResolvedFlags) {
+	if !slices.Equal(baseline.ResolvedFlags, candidate.ResolvedFlags) {
 		fields = append(fields, "resolvedFlags")
 	}
-	if !equalStrings(baseline.RuntimeFlags, candidate.RuntimeFlags) {
+	if !slices.Equal(baseline.RuntimeFlags, candidate.RuntimeFlags) {
 		fields = append(fields, "runtimeFlags")
 	}
 	if baseline.LighthouseVersion != candidate.LighthouseVersion {
@@ -285,18 +285,6 @@ func compatibleProtocols(baseline, candidate bundle.Protocol) error {
 		return &IncompatibleError{Fields: fields}
 	}
 	return nil
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func classifyLowerBetter(baseline, candidate, baselineMAD, candidateMAD float64, policy materialityPolicy) Metric {
@@ -338,8 +326,6 @@ func overall(metrics []Metric) Classification {
 		switch metric.Classification {
 		case Regression:
 			hasRegression = true
-		case Inconclusive:
-			return Inconclusive
 		case Improvement:
 			hasImprovement = true
 		}

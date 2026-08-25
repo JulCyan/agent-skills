@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"slices"
 
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/engine"
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/lhr"
@@ -49,7 +50,7 @@ func (s *Store) ValidateEvidence() (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	if summary != nil && !sameStrings(summary.Warnings, CanonicalWarnings(manifest.Attempts, summary.Samples, warningSignals)) {
+	if summary != nil && !slices.Equal(summary.Warnings, CanonicalWarnings(manifest.Attempts, summary.Samples, warningSignals)) {
 		return nil, invalidEvidence("warnings")
 	}
 	return summary, nil
@@ -175,22 +176,13 @@ func validateAggregateState(manifest Manifest, summary Summary) error {
 	default:
 		return invalidEvidence("aggregate state")
 	}
-	if hasCleanupFailure && !containsWarning(summary.Warnings, "temporary browser cleanup failed") {
+	if hasCleanupFailure && !slices.Contains(summary.Warnings, "temporary browser cleanup failed") {
 		return invalidEvidence("missing cleanup warning")
 	}
-	if hasFailedAttempt && !containsWarning(summary.Warnings, "one or more attempts failed") {
+	if hasFailedAttempt && !slices.Contains(summary.Warnings, "one or more attempts failed") {
 		return invalidEvidence("missing attempt failure warning")
 	}
 	return nil
-}
-
-func containsWarning(warnings []string, want string) bool {
-	for _, warning := range warnings {
-		if warning == want {
-			return true
-		}
-	}
-	return false
 }
 
 func validDisplayedURL(value string, optional bool) bool {
@@ -205,7 +197,7 @@ func validDisplayedURL(value string, optional bool) bool {
 // executor, never a self-fingerprinted arbitrary profile or runtime flag set.
 func ValidateProtocol(protocol Protocol) error {
 	compiled, err := profile.Resolve(protocol.Profile)
-	if err != nil || protocol.SchemaVersion != 1 || protocol.FormFactor != compiled.FormFactor || protocol.ThrottlingMethod != compiled.ThrottlingMethod || !sameStrings(protocol.ResolvedFlags, compiled.LighthouseArgs) || !sameStrings(protocol.RuntimeFlags, ExpectedRuntimeFlags()) || protocol.LighthouseVersion != engine.LighthouseVersion || !engine.SupportsNodeVersion(protocol.NodeVersion) || !versionPattern.MatchString(protocol.ChromeVersion) || !platformPattern.MatchString(protocol.OS) || !platformPattern.MatchString(protocol.Arch) || !fingerprintPattern.MatchString(protocol.Fingerprint) || protocol.Fingerprint != ProtocolFingerprint(protocol) {
+	if err != nil || protocol.SchemaVersion != 1 || protocol.FormFactor != compiled.FormFactor || protocol.ThrottlingMethod != compiled.ThrottlingMethod || !slices.Equal(protocol.ResolvedFlags, compiled.LighthouseArgs) || !slices.Equal(protocol.RuntimeFlags, ExpectedRuntimeFlags()) || protocol.LighthouseVersion != engine.LighthouseVersion || !engine.SupportsNodeVersion(protocol.NodeVersion) || !versionPattern.MatchString(protocol.ChromeVersion) || !platformPattern.MatchString(protocol.OS) || !platformPattern.MatchString(protocol.Arch) || !fingerprintPattern.MatchString(protocol.Fingerprint) || protocol.Fingerprint != ProtocolFingerprint(protocol) {
 		return invalidEvidence("protocol")
 	}
 	return nil
@@ -482,15 +474,3 @@ func validWarnings(warnings []string, attempts int) bool {
 }
 
 func invalidEvidence(part string) error { return fmt.Errorf("%w: %s", ErrInvalidEvidence, part) }
-
-func sameStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}

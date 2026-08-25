@@ -28,7 +28,7 @@
 ## 4. Statistics and comparison
 
 - [x] Add failing tests for median, MAD, IQR, official-score aggregation,
-  protocol mismatch, materiality, and inconclusive classifications.
+  protocol mismatch, and materiality classifications.
 - [x] Implement inspect and compare without synthesizing a Lighthouse score or
   hiding instability.
 

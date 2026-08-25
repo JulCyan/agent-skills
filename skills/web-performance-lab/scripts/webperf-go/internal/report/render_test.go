@@ -29,7 +29,7 @@ func TestRenderEscapesEvidenceTextAndUsesNoActiveContent(t *testing.T) {
 			RequestedRuns:    5,
 			SuccessfulRuns:   5,
 			Metrics: []Metric{{
-				Key: "lcp", Label: "Largest Contentful Paint", Unit: "time",
+				Key: "lcp", Label: "Largest Contentful Paint",
 				Distribution: stats.Distribution{Count: 5, Median: 1500, MAD: 100, IQR: 200, Min: 1200, Max: 1800},
 				Points:       []Point{{Attempt: 1, Value: 1500, Position: 50}}, MedianPosition: 50,
 			}},

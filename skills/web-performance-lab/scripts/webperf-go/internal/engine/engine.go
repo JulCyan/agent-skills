@@ -58,10 +58,6 @@ type commandRunner interface {
 
 type nodeResolver interface {
 	Resolve(context.Context) (string, error)
-}
-
-type nodeMetadataResolver interface {
-	nodeResolver
 	Version(context.Context, string) (string, error)
 }
 
@@ -217,14 +213,6 @@ func (m Manager) Runtime(ctx context.Context) (Runtime, error) {
 	return runtime, nil
 }
 
-func (m Manager) engineDir() (string, error) {
-	managedDirs, err := m.managerOwnedDirs()
-	if err != nil {
-		return "", err
-	}
-	return managedDirs[len(managedDirs)-1], nil
-}
-
 func (m Manager) managerOwnedDirs() ([]string, error) {
 	root := m.cacheRoot
 	if root == "" {
@@ -328,13 +316,7 @@ type Runtime struct {
 
 func (r Runtime) Version() string { return r.version }
 
-func (r Runtime) CLIPath() string { return r.cliPath }
-
-func (r Runtime) NodePath() string { return r.nodePath }
-
 func (r Runtime) NodeVersion() string { return r.nodeVersion }
-
-func (r Runtime) ChromePath() string { return r.chromePath }
 
 func (r Runtime) ChromeVersion() string { return r.chromeVersion }
 
@@ -359,12 +341,8 @@ func (m Manager) runtimeForPayload(ctx context.Context, root string) (Runtime, e
 	if err != nil {
 		return Runtime{}, ErrNeedsSetup
 	}
-	metadataResolver, ok := resolver.(nodeMetadataResolver)
-	if !ok {
-		return Runtime{}, ErrNeedsSetup
-	}
-	nodeVersion, err := metadataResolver.Version(ctx, nodePath)
-	if err != nil || !supportedNodeVersion(nodeVersion) {
+	nodeVersion, err := resolver.Version(ctx, nodePath)
+	if err != nil || !SupportsNodeVersion(nodeVersion) {
 		return Runtime{}, ErrNeedsSetup
 	}
 	chrome := m.chrome
@@ -392,7 +370,7 @@ type systemNodeResolver struct {
 	commands commandRunner
 }
 
-func (r systemNodeResolver) Resolve(ctx context.Context) (string, error) {
+func (r systemNodeResolver) Resolve(context.Context) (string, error) {
 	lookup := r.lookPath
 	if lookup == nil {
 		lookup = exec.LookPath
@@ -403,10 +381,6 @@ func (r systemNodeResolver) Resolve(ctx context.Context) (string, error) {
 	}
 	nodePath, err = filepath.Abs(nodePath)
 	if err != nil {
-		return "", ErrNeedsSetup
-	}
-	version, err := r.Version(ctx, nodePath)
-	if err != nil || !supportedNodeVersion(version) {
 		return "", ErrNeedsSetup
 	}
 	return nodePath, nil
@@ -422,14 +396,10 @@ func (r systemNodeResolver) Version(ctx context.Context, nodePath string) (strin
 		return "", ErrNeedsSetup
 	}
 	version := normalizedNodeVersion(stdout.String())
-	if !supportedNodeVersion(version) {
+	if !SupportsNodeVersion(version) {
 		return "", ErrNeedsSetup
 	}
 	return version, nil
-}
-
-func supportedNodeVersion(output string) bool {
-	return SupportsNodeVersion(output)
 }
 
 // SupportsNodeVersion reports whether a canonical MAJOR.MINOR.PATCH Node
@@ -578,12 +548,7 @@ func (r Runner) Run(ctx context.Context, request Request) Result {
 	if err == nil {
 		return Result{}
 	}
-	exitCode := 1
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		exitCode = exitErr.ExitCode()
-	}
-	return Result{ExitCode: exitCode, Err: err}
+	return commandResult(err)
 }
 
 // RunRaw forwards expert arguments only through the verified Runtime Node and

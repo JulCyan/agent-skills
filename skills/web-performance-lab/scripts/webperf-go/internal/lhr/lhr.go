@@ -37,12 +37,8 @@ func Parse(data []byte) (Sample, error) {
 		return Sample{}, fmt.Errorf("%w: decode report: %v", ErrParse, err)
 	}
 
-	finalURL := report.FinalDisplayedURL
-	if !isHTTPURL(finalURL) {
-		finalURL = report.FinalURL
-	}
-	if !isHTTPURL(finalURL) {
-		return Sample{}, parseField("finalDisplayedUrl or finalUrl")
+	if !isHTTPURL(report.FinalDisplayedURL) {
+		return Sample{}, parseField("finalDisplayedUrl")
 	}
 	if report.LighthouseVersion == "" {
 		return Sample{}, parseField("lighthouseVersion")
@@ -77,7 +73,7 @@ func Parse(data []byte) (Sample, error) {
 
 	return Sample{
 		LighthouseVersion: report.LighthouseVersion,
-		FinalURL:          finalURL,
+		FinalURL:          report.FinalDisplayedURL,
 		PerformanceScore:  *report.Categories.Performance.Score * 100,
 		FCP:               fcp,
 		LCP:               lcp,
@@ -93,7 +89,6 @@ func Parse(data []byte) (Sample, error) {
 type report struct {
 	LighthouseVersion string `json:"lighthouseVersion"`
 	FinalDisplayedURL string `json:"finalDisplayedUrl"`
-	FinalURL          string `json:"finalUrl"`
 	Categories        struct {
 		Performance struct {
 			Score *float64 `json:"score"`

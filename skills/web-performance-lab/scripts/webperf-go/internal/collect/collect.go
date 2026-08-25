@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/bundle"
@@ -214,7 +215,7 @@ func validateRequest(request Request) error {
 	if err := bundle.ValidateProtocol(protocol); err != nil {
 		return fmt.Errorf("%w: complete measurement protocol is required", ErrInvalidRequest)
 	}
-	if request.Profile.Name != protocol.Profile || request.Profile.FormFactor != protocol.FormFactor || request.Profile.ThrottlingMethod != protocol.ThrottlingMethod || !equalStrings(request.Profile.LighthouseArgs, protocol.ResolvedFlags) {
+	if request.Profile.Name != protocol.Profile || request.Profile.FormFactor != protocol.FormFactor || request.Profile.ThrottlingMethod != protocol.ThrottlingMethod || !slices.Equal(request.Profile.LighthouseArgs, protocol.ResolvedFlags) {
 		return fmt.Errorf("%w: profile and protocol must match exactly", ErrInvalidRequest)
 	}
 	return nil
@@ -227,18 +228,6 @@ func hasNonOKAttempt(attempts []bundle.Attempt) bool {
 		}
 	}
 	return false
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func (s Service) runAttempt(ctx context.Context, request Request, attempt int) (raw []byte, result engine.Result, cleanupErr error) {
@@ -309,13 +298,4 @@ func sanitizeSample(sample lhr.Sample) (lhr.Sample, string) {
 	}
 	sample.FinalURL = safeurl.Display(parsed)
 	return sample, ""
-}
-
-func addInstabilityWarnings(summary *bundle.Summary, rawFinalURLChanged bool) {
-	var signals bundle.WarningSignals
-	if rawFinalURLChanged {
-		signals.RawFinalURLs = []string{"first", "second"}
-	}
-	summary.Metrics = bundle.SummarizeSamples(summary.Samples)
-	summary.Warnings = bundle.CanonicalWarnings(nil, summary.Samples, signals)
 }

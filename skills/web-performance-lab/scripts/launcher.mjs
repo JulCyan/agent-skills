@@ -90,22 +90,6 @@ function needsSetup(code, message, remediation) {
   return 2;
 }
 
-async function runTrustedOverride(binary, args) {
-  const result = await run(binary, args, {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: 'inherit',
-  });
-  if (result.error) {
-    return needsSetup(
-      'trusted_binary_unavailable',
-      'The trusted webperf binary could not be started.',
-      'Check WEBPERF_BINARY and retry.',
-    );
-  }
-  return result.code;
-}
-
 async function buildAndExecute(args, buildDirectory) {
   const environment = controlledGoEnvironment(buildDirectory);
   await Promise.all([
@@ -140,14 +124,14 @@ async function buildAndExecute(args, buildDirectory) {
     return needsSetup(
       'go_required',
       'Go is required to build the bundled webperf CLI.',
-      'Install Go and retry, or set WEBPERF_BINARY to a trusted executable.',
+      'Install Go 1.25.1 or newer and retry.',
     );
   }
   if (build.error || build.code !== 0) {
     return needsSetup(
       'go_build_failed',
       'The bundled webperf CLI could not be built.',
-      'Use a supported local Go toolchain or set WEBPERF_BINARY to a trusted executable.',
+      'Use Go 1.25.1 or newer and retry.',
     );
   }
 
@@ -160,7 +144,7 @@ async function buildAndExecute(args, buildDirectory) {
     return needsSetup(
       'built_binary_unavailable',
       'The built webperf CLI could not be started.',
-      'Retry the command or set WEBPERF_BINARY to a trusted executable.',
+      'Retry the command.',
     );
   }
   return executed.code;
@@ -188,14 +172,12 @@ async function buildAndRun(args) {
 async function main() {
   try {
     const args = process.argv.slice(2);
-    const trustedBinary = process.env.WEBPERF_BINARY;
-    if (trustedBinary) return await runTrustedOverride(trustedBinary, args);
     return await buildAndRun(args);
   } catch {
     return needsSetup(
       'launcher_failed',
       'The webperf launcher could not prepare the bundled CLI.',
-      'Check local temporary storage and retry, or set WEBPERF_BINARY to a trusted executable.',
+      'Check local temporary storage and retry.',
     );
   }
 }

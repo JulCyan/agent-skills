@@ -194,8 +194,8 @@ func TestCreateWritesPendingManifestAndOpenReadsIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.Path() != target {
-		t.Fatalf("path=%q", store.Path())
+	if store.path != target {
+		t.Fatalf("path=%q", store.path)
 	}
 	assertMode(t, target, 0o700)
 	if _, err := os.Lstat(filepath.Join(target, manifestFile)); !errors.Is(err, os.ErrNotExist) {

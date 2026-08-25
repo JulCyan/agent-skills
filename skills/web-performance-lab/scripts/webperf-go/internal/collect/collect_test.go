@@ -210,7 +210,7 @@ func TestServiceRunMarksCompleteSamplesWithFailedAttemptsPartial(t *testing.T) {
 	if summary.Status != string(contract.Partial) || summary.SuccessfulRuns != 3 || summary.Metrics.LCP.Count != 3 {
 		t.Fatalf("summary=%+v", summary)
 	}
-	if !contains(fmt.Sprint(summary.Warnings), "attempts failed") {
+	if !strings.Contains(fmt.Sprint(summary.Warnings), "attempts failed") {
 		t.Fatalf("warnings=%v", summary.Warnings)
 	}
 	store, openErr := bundle.Open(request.Out)
@@ -243,11 +243,11 @@ func TestServiceRunRedactsFinalURLAndWarnsOnDrift(t *testing.T) {
 	}
 	joined := fmt.Sprint(summary.Warnings)
 	for _, forbidden := range []string{"one", "two", "three", "#first", "#second"} {
-		if contains(joined, forbidden) {
+		if strings.Contains(joined, forbidden) {
 			t.Fatalf("summary warning exposed %q: %s", forbidden, joined)
 		}
 	}
-	if !contains(joined, "final URL changed") || !contains(joined, "LCP selector changed") {
+	if !strings.Contains(joined, "final URL changed") || !strings.Contains(joined, "LCP selector changed") {
 		t.Fatalf("warnings=%v", summary.Warnings)
 	}
 	contents, readErr := os.ReadFile(filepath.Join(request.Out, "summary.json"))
@@ -255,7 +255,7 @@ func TestServiceRunRedactsFinalURLAndWarnsOnDrift(t *testing.T) {
 		t.Fatal(readErr)
 	}
 	for _, forbidden := range []string{"token=one", "token=two", "token=three", "source-secret", "warning-token"} {
-		if contains(string(contents), forbidden) {
+		if strings.Contains(string(contents), forbidden) {
 			t.Fatalf("summary.json exposed %q: %s", forbidden, contents)
 		}
 	}
@@ -275,10 +275,10 @@ func TestServiceRunNeverPersistsUnsafeFinalURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded := fmt.Sprintf("%+v", summary)
-	if contains(encoded, "secret") || contains(encoded, "token=one") {
+	if strings.Contains(encoded, "secret") || strings.Contains(encoded, "token=one") {
 		t.Fatalf("summary exposed unsafe final URL: %s", encoded)
 	}
-	if !contains(fmt.Sprint(summary.Warnings), "invalid final URL") {
+	if !strings.Contains(fmt.Sprint(summary.Warnings), "invalid final URL") {
 		t.Fatalf("warnings=%v", summary.Warnings)
 	}
 }
@@ -295,7 +295,7 @@ func TestServiceRunWarnsWhenOnlyFinalQueryValueChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(fmt.Sprint(summary.Warnings), "final URL changed") {
+	if !strings.Contains(fmt.Sprint(summary.Warnings), "final URL changed") {
 		t.Fatalf("warnings=%v", summary.Warnings)
 	}
 	contents, readErr := os.ReadFile(filepath.Join(request.Out, "summary.json"))
@@ -303,7 +303,7 @@ func TestServiceRunWarnsWhenOnlyFinalQueryValueChanges(t *testing.T) {
 		t.Fatal(readErr)
 	}
 	for _, forbidden := range []string{"variant=one", "variant=two", "variant=three"} {
-		if contains(string(contents), forbidden) {
+		if strings.Contains(string(contents), forbidden) {
 			t.Fatalf("summary exposed %q: %s", forbidden, contents)
 		}
 	}
@@ -406,7 +406,7 @@ func TestServiceRunMarksCleanupFailurePartialWithoutPathLeak(t *testing.T) {
 		t.Fatalf("err=%v summary=%+v", err, summary)
 	}
 	encoded := fmt.Sprintf("%+v", summary)
-	if contains(encoded, "/private/tmp") || !contains(encoded, "temporary browser cleanup failed") {
+	if strings.Contains(encoded, "/private/tmp") || !strings.Contains(encoded, "temporary browser cleanup failed") {
 		t.Fatalf("summary=%s", encoded)
 	}
 }
@@ -423,10 +423,10 @@ func TestServiceRunReportsCleanupFailureWhenEngineAttemptFails(t *testing.T) {
 		Runner:    runner,
 		RemoveAll: func(string) error { return errors.New("cleanup failed /private/tmp/webperf-chrome-secret") },
 	}).Run(context.Background(), request)
-	if !errors.Is(err, ErrIncomplete) || !contains(fmt.Sprint(summary.Warnings), "temporary browser cleanup failed") {
+	if !errors.Is(err, ErrIncomplete) || !strings.Contains(fmt.Sprint(summary.Warnings), "temporary browser cleanup failed") {
 		t.Fatalf("err=%v summary=%+v", err, summary)
 	}
-	if contains(fmt.Sprint(summary), "/private/tmp") {
+	if strings.Contains(fmt.Sprint(summary), "/private/tmp") {
 		t.Fatalf("summary exposed temporary path: %+v", summary)
 	}
 }
@@ -473,27 +473,6 @@ func TestServiceRunInterruptsBeforeFinalCommitAndDoesNotWriteSummary(t *testing.
 	}
 	if _, statErr := os.Lstat(filepath.Join(request.Out, "summary.json")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("summary was committed after cancellation: %v", statErr)
-	}
-}
-
-func TestAddInstabilityWarningsIncludesZeroMedianAndMissingSelectorIdentity(t *testing.T) {
-	summary := bundle.Summary{Samples: []bundle.SuccessfulSample{
-		{Attempt: 1, Sample: lhr.Sample{PerformanceScore: 80, CLS: 0, TBT: 0, LCPSelector: ""}},
-		{Attempt: 2, Sample: lhr.Sample{PerformanceScore: 80, CLS: 0, TBT: 0, LCPSelector: "main > img"}},
-		{Attempt: 3, Sample: lhr.Sample{PerformanceScore: 95, CLS: .10, TBT: 100, LCPSelector: ""}},
-	}}
-
-	addInstabilityWarnings(&summary, false)
-	joined := fmt.Sprint(summary.Warnings)
-	for _, warning := range []string{
-		"LCP selector changed",
-		"high dispersion for Performance Score",
-		"high dispersion for CLS",
-		"high dispersion for TBT",
-	} {
-		if !contains(joined, warning) {
-			t.Fatalf("warnings=%v missing %q", summary.Warnings, warning)
-		}
 	}
 }
 
@@ -630,17 +609,4 @@ func browserDirFrom(t *testing.T, args []string) string {
 	}
 	t.Fatalf("missing browser directory flag: %v", args)
 	return ""
-}
-
-func contains(value, fragment string) bool {
-	return len(fragment) == 0 || (len(value) >= len(fragment) && stringContains(value, fragment))
-}
-
-func stringContains(value, fragment string) bool {
-	for index := 0; index+len(fragment) <= len(value); index++ {
-		if value[index:index+len(fragment)] == fragment {
-			return true
-		}
-	}
-	return false
 }

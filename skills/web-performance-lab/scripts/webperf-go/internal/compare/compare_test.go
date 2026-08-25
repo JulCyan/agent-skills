@@ -179,10 +179,6 @@ func metricsFor(samples []bundle.SuccessfulSample) bundle.Metrics {
 	}
 }
 
-func distribution(median, mad float64) stats.Distribution {
-	return stats.Distribution{Count: 5, Median: median, MAD: mad, Min: median - mad, Max: median + mad, IQR: mad * 2}
-}
-
 func protocol() bundle.Protocol {
 	return bundle.CompleteProtocol(bundle.Protocol{
 		SchemaVersion:     1,

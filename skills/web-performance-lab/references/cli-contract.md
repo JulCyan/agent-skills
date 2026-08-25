@@ -8,9 +8,9 @@
 <skill-dir>/scripts/webperf [--json] <command>
 ```
 
-相对 URL 以外的路径均按调用者 cwd 解析。`WEBPERF_BINARY` 是显式可信 binary 覆盖并优先执行；未设置时，launcher 将 Skill 自带 Go module 构建到唯一临时目录、运行后清理。缺少 Go 时 launcher 输出稳定 `NEEDS_SETUP` JSON 并以 2 退出；它不会输出本机绝对路径。
+相对 URL 以外的路径均按调用者 cwd 解析。launcher 将 Skill 自带 Go module 构建到唯一临时目录、运行后清理。缺少 Go 时 launcher 输出稳定 `NEEDS_SETUP` JSON 并以 2 退出；它不会输出本机绝对路径。
 
-运行 wrapper 需要本机 Node.js；source fallback 需要符合 `go.mod` 要求的 Go 1.25.1+，且不会自动下载 toolchain。locked engine 另外需要 npm、Node.js 22.19+ 及可识别的 Chrome/Chromium。也可把 `WEBPERF_BINARY` 指向调用者已验证的可执行文件以跳过 source build。
+运行 wrapper 需要本机 Node.js；bundled-source execution 需要符合 `go.mod` 要求的 Go 1.25.1+，且不会自动下载 toolchain。locked engine 另外需要 npm、Node.js 22.19+ 及可识别的 Chrome/Chromium。
 
 ## 命令
 
@@ -81,7 +81,6 @@ Managed commands 输出：
 | `ENGINE_FAILED` | envelope / attempt | fatal collection failure，或单次 Lighthouse/browser attempt 失败 | 1（attempt 无独立 exit） |
 | `REPORT_FAILED` | envelope | verified evidence 的 HTML 构建或落盘失败；不改变 evidence | 1 |
 | `PARSE_FAILED` | attempt only | 单次 LHR 无法按锁定 schema 解析；collect envelope 汇总为 `PARTIAL` | n/a |
-| `NAVIGATION_FAILED` | reserved | schema v1 保留值，当前 executor 不产生该状态 | n/a |
 
 ## Evidence 与恢复
 

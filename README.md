@@ -56,9 +56,8 @@ directory inputs do not.
 
 ### `web-performance-lab`
 
-The POSIX wrapper uses Node.js 22.19 or newer. It runs an explicit trusted
-`WEBPERF_BINARY` when provided; otherwise it builds the bundled source with Go
-1.25.1 or newer in an executor-owned temporary directory. The locked
+The POSIX wrapper uses Node.js 22.19 or newer and builds the bundled source with
+Go 1.25.1 or newer in an executor-owned temporary directory. The locked
 Lighthouse runtime also requires npm and a supported local Chrome/Chromium.
 
 `engine setup` is the only engine installation command. It requires explicit

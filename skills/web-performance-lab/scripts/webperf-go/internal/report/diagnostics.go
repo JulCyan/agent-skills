@@ -58,19 +58,11 @@ type diagnosticListItem struct {
 }
 
 var opportunityLabels = map[string]string{
-	"efficient-animated-content": "Use efficient animated content",
-	"modern-image-formats":       "Serve images in modern formats",
-	"offscreen-images":           "Defer offscreen images",
-	"render-blocking-insight":    "Eliminate render-blocking resources",
-	"render-blocking-resources":  "Eliminate render-blocking resources",
-	"server-response-time":       "Reduce initial server response time",
-	"unminified-css":             "Minify CSS",
-	"unminified-javascript":      "Minify JavaScript",
-	"unused-css-rules":           "Reduce unused CSS",
-	"unused-javascript":          "Reduce unused JavaScript",
-	"uses-optimized-images":      "Efficiently encode images",
-	"uses-responsive-images":     "Properly size images",
-	"uses-text-compression":      "Enable text compression",
+	"server-response-time":  "Reduce initial server response time",
+	"unminified-css":        "Minify CSS",
+	"unminified-javascript": "Minify JavaScript",
+	"unused-css-rules":      "Reduce unused CSS",
+	"unused-javascript":     "Reduce unused JavaScript",
 }
 
 var signalDefinitions = []struct {

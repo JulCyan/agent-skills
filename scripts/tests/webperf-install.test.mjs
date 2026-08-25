@@ -61,7 +61,7 @@ function webperfRuntimeEnvironment(
     XDG_CACHE_HOME: xdgCache,
   };
   for (const key of Object.keys(scrubbed)) {
-    if (key === 'WEBPERF_BINARY' || key.startsWith('WEBPERF_INTERNAL_')) {
+    if (key.startsWith('WEBPERF_INTERNAL_')) {
       delete scrubbed[key];
     }
   }

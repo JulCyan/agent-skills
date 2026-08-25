@@ -1,7 +1,10 @@
 // Package stats provides deterministic summaries for independently collected samples.
 package stats
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // Distribution is calculated only from the supplied values. It does not contain
 // a synthetic score assembled from other metric distributions.
@@ -26,7 +29,7 @@ func Summarize(values []float64) Distribution {
 	median := medianOf(sorted)
 	deviations := make([]float64, len(sorted))
 	for index, value := range sorted {
-		deviations[index] = abs(value - median)
+		deviations[index] = math.Abs(value - median)
 	}
 	sort.Float64s(deviations)
 
@@ -55,11 +58,4 @@ func medianOf(values []float64) float64 {
 		return values[middle]
 	}
 	return (values[middle-1] + values[middle]) / 2
-}
-
-func abs(value float64) float64 {
-	if value < 0 {
-		return -value
-	}
-	return value
 }

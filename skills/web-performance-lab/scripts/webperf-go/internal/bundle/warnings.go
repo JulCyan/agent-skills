@@ -2,6 +2,7 @@ package bundle
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/julcyan/agent-skills/skills/web-performance-lab/scripts/webperf-go/internal/stats"
 )
@@ -61,7 +62,7 @@ func CanonicalWarnings(attempts []Attempt, samples []SuccessfulSample, signals W
 	}
 	for _, attempt := range signals.LighthouseWarningAttempts {
 		if attempt > 0 {
-			add("Lighthouse reported warnings on attempt " + itoa(attempt))
+			add("Lighthouse reported warnings on attempt " + strconv.Itoa(attempt))
 		}
 	}
 
@@ -106,7 +107,6 @@ func CanonicalWarnings(attempts []Attempt, samples []SuccessfulSample, signals W
 		}
 	}
 
-	sort.Strings(warnings)
 	return uniqueStrings(warnings)
 }
 
@@ -123,20 +123,4 @@ func uniqueStrings(values []string) []string {
 		}
 	}
 	return unique
-}
-
-func itoa(value int) string {
-	// Avoid fmt's general formatter here; attempt numbers are the only
-	// interpolated warning component and the decimal form is the protocol.
-	if value == 0 {
-		return "0"
-	}
-	digits := [20]byte{}
-	index := len(digits)
-	for value > 0 {
-		index--
-		digits[index] = byte('0' + value%10)
-		value /= 10
-	}
-	return string(digits[index:])
 }

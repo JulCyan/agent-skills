@@ -31,7 +31,7 @@ func TestParseReadsLockedFields(t *testing.T) {
 	}
 }
 
-func TestParseUsesFinalURLWhenDisplayedURLIsMissing(t *testing.T) {
+func TestParseRejectsMissingDisplayedURL(t *testing.T) {
 	payload := []byte(`{
         "lighthouseVersion":"13.4.1",
         "finalUrl":"https://example.test/page",
@@ -46,16 +46,12 @@ func TestParseUsesFinalURLWhenDisplayedURLIsMissing(t *testing.T) {
         "environment":{"benchmarkIndex":5}
     }`)
 
-	got, err := Parse(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.FinalURL != "https://example.test/page" {
-		t.Fatalf("final URL=%q", got.FinalURL)
+	if _, err := Parse(payload); err == nil {
+		t.Fatal("Parse succeeded")
 	}
 }
 
-func TestParseUsesSafeFinalURLWhenDisplayedURLIsInvalid(t *testing.T) {
+func TestParseRejectsInvalidDisplayedURL(t *testing.T) {
 	payload := []byte(`{
         "lighthouseVersion":"13.4.1",
         "finalDisplayedUrl":"javascript:alert(1)",
@@ -71,12 +67,8 @@ func TestParseUsesSafeFinalURLWhenDisplayedURLIsInvalid(t *testing.T) {
         "environment":{"benchmarkIndex":5}
     }`)
 
-	got, err := Parse(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.FinalURL != "https://example.test/page" {
-		t.Fatalf("final URL=%q", got.FinalURL)
+	if _, err := Parse(payload); err == nil {
+		t.Fatal("Parse succeeded")
 	}
 }
 

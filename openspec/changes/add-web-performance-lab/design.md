@@ -13,9 +13,9 @@ authentication, remote mutation, background service, upload, or CI gate.
 
 ## Architecture
 
-The installable unit is `skills/web-performance-lab`. A portable launcher finds
-an explicitly trusted binary or runs the bundled Go source. The Go CLI owns the
-command contract, profile registry, setup checks, sequential orchestration,
+The installable unit is `skills/web-performance-lab`. A portable launcher runs
+the bundled Go source. The Go CLI owns the command contract, profile registry,
+setup checks, sequential orchestration,
 artifact store, statistics, comparison, deterministic report rendering, and
 structured errors.
 
@@ -127,8 +127,8 @@ explicit instability warnings instead of being hidden behind the median.
 ## Comparison model
 
 Comparison first verifies schema and protocol fingerprints. Compatible bundles
-are classified per metric as `improvement`, `no_material_change`, `regression`,
-or `inconclusive`. Initial materiality floors are:
+are classified per metric as `improvement`, `no_material_change`, or
+`regression`. Initial materiality floors are:
 
 - timing metrics: the greater of ten percent and twice the observed group MAD;
 - performance score: five absolute points;
@@ -196,8 +196,8 @@ personal absolute path.
 ## Error model
 
 Machine-readable statuses include `OK`, `PARTIAL`, `INCONCLUSIVE`,
-`NEEDS_SETUP`, `INVALID_INPUT`, `ENGINE_FAILED`, `NAVIGATION_FAILED`,
-`PARSE_FAILED`, `REPORT_FAILED`, `INCOMPATIBLE_PROTOCOL`, and `INTERRUPTED`. JSON errors contain a
+`NEEDS_SETUP`, `INVALID_INPUT`, `ENGINE_FAILED`, `PARSE_FAILED`, `REPORT_FAILED`,
+`INCOMPATIBLE_PROTOCOL`, and `INTERRUPTED`. JSON errors contain a
 stable code, safe message, and remediation hint without credentials or raw
 query values.
 

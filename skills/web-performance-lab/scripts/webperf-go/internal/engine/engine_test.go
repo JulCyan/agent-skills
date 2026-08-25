@@ -89,8 +89,8 @@ func TestSetupInstallsLockedEngineThroughNPMCI(t *testing.T) {
 	if runtime.Version() != lighthouseVersion {
 		t.Fatalf("version=%q want=%q", runtime.Version(), lighthouseVersion)
 	}
-	if runtime.CLIPath() != filepath.Join(target, installPayloadDir, lighthouseCLIPath) {
-		t.Fatalf("CLI path=%q", runtime.CLIPath())
+	if runtime.cliPath != filepath.Join(target, installPayloadDir, lighthouseCLIPath) {
+		t.Fatalf("CLI path=%q", runtime.cliPath)
 	}
 	payloadInfo, err := os.Lstat(filepath.Join(target, installPayloadDir))
 	if err != nil || !payloadInfo.IsDir() {
@@ -759,11 +759,11 @@ func TestRuntimeRejectsManagerOwnedAncestorSymlink(t *testing.T) {
 
 func TestRuntimeRequiresNodeAtLeast2219(t *testing.T) {
 	tests := []struct {
-		name        string
-		lookup      func(string) (string, error)
-		version     string
-		wantErr     bool
-		wantCommand bool
+		name      string
+		lookup    func(string) (string, error)
+		version   string
+		wantErr   bool
+		wantCalls int
 	}{
 		{
 			name: "missing",
@@ -773,17 +773,17 @@ func TestRuntimeRequiresNodeAtLeast2219(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:        "too old",
-			lookup:      func(string) (string, error) { return "/test/bin/node-22.18", nil },
-			version:     "v22.18.0\n",
-			wantErr:     true,
-			wantCommand: true,
+			name:      "too old",
+			lookup:    func(string) (string, error) { return "/test/bin/node-22.18", nil },
+			version:   "v22.18.0\n",
+			wantErr:   true,
+			wantCalls: 1,
 		},
 		{
-			name:        "minimum supported",
-			lookup:      func(string) (string, error) { return "/test/bin/node-22.19", nil },
-			version:     "v22.19.0\n",
-			wantCommand: true,
+			name:      "minimum supported",
+			lookup:    func(string) (string, error) { return "/test/bin/node-22.19", nil },
+			version:   "v22.19.0\n",
+			wantCalls: 1,
 		},
 	}
 
@@ -819,12 +819,12 @@ func TestRuntimeRequiresNodeAtLeast2219(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if runtime.NodePath() != "/test/bin/node-22.19" {
-					t.Fatalf("node path=%q", runtime.NodePath())
+				if runtime.nodePath != "/test/bin/node-22.19" {
+					t.Fatalf("node path=%q", runtime.nodePath)
 				}
 			}
-			if got := len(commands.calls) > 0; got != tt.wantCommand {
-				t.Fatalf("node command called=%t want=%t", got, tt.wantCommand)
+			if got := len(commands.calls); got != tt.wantCalls {
+				t.Fatalf("node command calls=%d want=%d", got, tt.wantCalls)
 			}
 		})
 	}
@@ -843,8 +843,8 @@ func TestRuntimeReportsResolvedNodeAndChromeVersions(t *testing.T) {
 	if runtime.NodeVersion() != "22.20.0" || runtime.ChromeVersion() != "150.0.7871.187" {
 		t.Fatalf("node=%q chrome=%q", runtime.NodeVersion(), runtime.ChromeVersion())
 	}
-	if runtime.ChromePath() != "/test/bin/chrome" {
-		t.Fatalf("chrome path=%q", runtime.ChromePath())
+	if runtime.chromePath != "/test/bin/chrome" {
+		t.Fatalf("chrome path=%q", runtime.chromePath)
 	}
 }
 
@@ -862,11 +862,11 @@ func TestRunnerUsesLockedCLIAndProfileArgumentsWithoutShell(t *testing.T) {
 		if gotCtx.Value(ctxKey) != "runner-context" {
 			t.Fatal("runner context was not propagated")
 		}
-		if name != runtime.NodePath() {
-			t.Fatalf("command=%q want=%q", name, runtime.NodePath())
+		if name != runtime.nodePath {
+			t.Fatalf("command=%q want=%q", name, runtime.nodePath)
 		}
 		wantArgs := []string{
-			runtime.CLIPath(),
+			runtime.cliPath,
 			"https://example.com/product?a=1&b=2",
 			"--form-factor=desktop",
 			"--throttling-method=provided",
@@ -921,10 +921,10 @@ func TestRunnerRunRawUsesOnlyLockedNodeCLIAndResolvedChrome(t *testing.T) {
 		t.Fatalf("result=%+v calls=%+v", result, commands.calls)
 	}
 	call := commands.calls[0]
-	if call.name != runtime.NodePath() {
+	if call.name != runtime.nodePath {
 		t.Fatalf("command=%q", call.name)
 	}
-	want := []string{runtime.CLIPath(), "--output=json", "https://example.test"}
+	want := []string{runtime.cliPath, "--output=json", "https://example.test"}
 	if !reflect.DeepEqual(call.args, want) {
 		t.Fatalf("args=%v want=%v", call.args, want)
 	}
@@ -1404,11 +1404,11 @@ func (r staticChromeResolver) Resolve(context.Context) (chromeRuntime, error) {
 
 func (m Manager) targetDir(t *testing.T) string {
 	t.Helper()
-	target, err := m.engineDir()
+	managedDirs, err := m.managerOwnedDirs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return target
+	return managedDirs[len(managedDirs)-1]
 }
 
 func installFixture(t *testing.T, root, version string) {

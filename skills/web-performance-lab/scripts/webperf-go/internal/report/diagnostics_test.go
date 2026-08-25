@@ -66,6 +66,26 @@ func TestParseDiagnosticsTreatsOptionalShapeChangesAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestParseDiagnosticsIgnoresAuditsOutsideLockedOpportunitySet(t *testing.T) {
+	payload := []byte(`{"audits":{
+        "efficient-animated-content":{"details":{"overallSavingsMs":100}},
+        "modern-image-formats":{"details":{"overallSavingsBytes":200}},
+        "offscreen-images":{"details":{"overallSavingsMs":300}},
+        "render-blocking-resources":{"details":{"overallSavingsMs":400}},
+        "uses-optimized-images":{"details":{"overallSavingsBytes":500}},
+        "uses-responsive-images":{"details":{"overallSavingsBytes":600}},
+        "uses-text-compression":{"details":{"overallSavingsBytes":700}}
+    }}`)
+
+	diagnostics, err := parseDiagnostics(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diagnostics.Opportunities) != 0 {
+		t.Fatalf("opportunities=%+v", diagnostics.Opportunities)
+	}
+}
+
 func TestParseDiagnosticsRejectsInvalidJSON(t *testing.T) {
 	if _, err := parseDiagnostics([]byte(`{"audits":`)); err == nil {
 		t.Fatal("invalid JSON was accepted")

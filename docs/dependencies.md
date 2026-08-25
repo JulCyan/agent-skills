@@ -19,9 +19,8 @@ pinned Skills CLI used by the acceptance suite.
 `lark-cli` is required only for Lark/Feishu Sheet and Drive inputs. Local CSV,
 XLSX, JSON, zip, and directory inputs remain available without it.
 
-`web-performance-lab` uses its bundled Go source as the default fallback and
-therefore requires Go 1.25.1 or newer unless `WEBPERF_BINARY` points to a
-trusted compatible executable. Measurement requires a supported local
+`web-performance-lab` builds its bundled Go source for each invocation and
+therefore requires Go 1.25.1 or newer. Measurement requires a supported local
 Chrome/Chromium. Its locked engine requires npm; `engine setup` explicitly
 connects to the npm registry and writes to the user's cache, so it must be
 authorized before use.

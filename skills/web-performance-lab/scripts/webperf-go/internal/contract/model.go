@@ -22,7 +22,6 @@ const (
 	NeedsSetup           Status = "NEEDS_SETUP"
 	InvalidInput         Status = "INVALID_INPUT"
 	EngineFailed         Status = "ENGINE_FAILED"
-	NavigationFailed     Status = "NAVIGATION_FAILED"
 	ParseFailed          Status = "PARSE_FAILED"
 	ReportFailed         Status = "REPORT_FAILED"
 	IncompatibleProtocol Status = "INCOMPATIBLE_PROTOCOL"

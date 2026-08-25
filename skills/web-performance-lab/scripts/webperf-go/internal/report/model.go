@@ -72,7 +72,6 @@ type Run struct {
 type Metric struct {
 	Key            string
 	Label          string
-	Unit           string
 	Distribution   stats.Distribution
 	Points         []Point
 	MedianPosition float64
@@ -85,11 +84,9 @@ type Point struct {
 }
 
 type Attempt struct {
-	Number     int
-	Status     string
-	StartedAt  string
-	FinishedAt string
-	Sample     *Sample
+	Number int
+	Status string
+	Sample *Sample
 }
 
 type Sample struct {
@@ -129,7 +126,6 @@ type Comparison struct {
 type ComparisonMetric struct {
 	Key              string
 	Label            string
-	Unit             string
 	Baseline         stats.Distribution
 	Candidate        stats.Distribution
 	Delta            float64
@@ -146,39 +142,38 @@ type loadedRun struct {
 type metricDefinition struct {
 	key          string
 	label        string
-	unit         string
 	value        func(lhr.Sample) float64
 	distribution func(bundle.Metrics) stats.Distribution
 }
 
 var metricDefinitions = []metricDefinition{
 	{
-		key: "performanceScore", label: "Performance score", unit: "0–100",
+		key: "performanceScore", label: "Performance score",
 		value:        func(sample lhr.Sample) float64 { return sample.PerformanceScore },
 		distribution: func(metrics bundle.Metrics) stats.Distribution { return metrics.PerformanceScore },
 	},
 	{
-		key: "fcp", label: "First Contentful Paint", unit: "time",
+		key: "fcp", label: "First Contentful Paint",
 		value:        func(sample lhr.Sample) float64 { return sample.FCP },
 		distribution: func(metrics bundle.Metrics) stats.Distribution { return metrics.FCP },
 	},
 	{
-		key: "lcp", label: "Largest Contentful Paint", unit: "time",
+		key: "lcp", label: "Largest Contentful Paint",
 		value:        func(sample lhr.Sample) float64 { return sample.LCP },
 		distribution: func(metrics bundle.Metrics) stats.Distribution { return metrics.LCP },
 	},
 	{
-		key: "speedIndex", label: "Speed Index", unit: "time",
+		key: "speedIndex", label: "Speed Index",
 		value:        func(sample lhr.Sample) float64 { return sample.SpeedIndex },
 		distribution: func(metrics bundle.Metrics) stats.Distribution { return metrics.SpeedIndex },
 	},
 	{
-		key: "tbt", label: "Total Blocking Time", unit: "time",
+		key: "tbt", label: "Total Blocking Time",
 		value:        func(sample lhr.Sample) float64 { return sample.TBT },
 		distribution: func(metrics bundle.Metrics) stats.Distribution { return metrics.TBT },
 	},
 	{
-		key: "cls", label: "Cumulative Layout Shift", unit: "ratio",
+		key: "cls", label: "Cumulative Layout Shift",
 		value:        func(sample lhr.Sample) float64 { return sample.CLS },
 		distribution: func(metrics bundle.Metrics) stats.Distribution { return metrics.CLS },
 	},
@@ -282,7 +277,6 @@ func BuildComparison(baselinePath, candidatePath string) (Document, error) {
 		metrics = append(metrics, ComparisonMetric{
 			Key:              result.Name,
 			Label:            definition.label,
-			Unit:             definition.unit,
 			Baseline:         definition.distribution(baselineLoaded.Summary.Metrics),
 			Candidate:        definition.distribution(candidateLoaded.Summary.Metrics),
 			Delta:            result.Delta,
@@ -426,7 +420,6 @@ func metricsFor(summary bundle.Summary, samples []bundle.SuccessfulSample) []Met
 		metrics = append(metrics, Metric{
 			Key:            definition.key,
 			Label:          definition.label,
-			Unit:           definition.unit,
 			Distribution:   distribution,
 			Points:         points,
 			MedianPosition: distributionPosition(distribution, distribution.Median),
@@ -442,7 +435,7 @@ func attemptsFor(manifest bundle.Manifest, samples []bundle.SuccessfulSample) []
 	}
 	attempts := make([]Attempt, 0, len(manifest.Attempts))
 	for _, item := range manifest.Attempts {
-		attempt := Attempt{Number: item.Number, Status: item.Status, StartedAt: item.StartedAt, FinishedAt: item.FinishedAt}
+		attempt := Attempt{Number: item.Number, Status: item.Status}
 		if sample, exists := byAttempt[item.Number]; exists {
 			attempt.Sample = &Sample{
 				PerformanceScore: sample.PerformanceScore,
