@@ -29,10 +29,10 @@ List the Skills exposed by the repository:
 npx skills add JulCyan/agent-skills --list
 ```
 
-This public preview does not yet include an open-source license. Until a
-license is selected, the commands above are for the author's own acceptance or
-other explicitly authorized evaluation; source visibility is not a grant to
-copy, modify, or redistribute the project.
+This repository is licensed under the [Apache License 2.0](LICENSE). The
+license grant, installation verification, binary release integrity, consumer
+rollout, and Shopify production behavior remain separate decisions and
+evidence layers.
 
 The consumer project owns the generated `skills-lock.json`. This provider
 repository intentionally does not commit a root lockfile because it publishes

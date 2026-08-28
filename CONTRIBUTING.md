@@ -31,6 +31,7 @@ organization-specific identifiers.
 Performance fixtures use synthetic `example.test` targets. Real target URLs,
 raw browser reports, and collected evidence bundles stay outside Git.
 
-The public preview does not yet accept code contributions that require a
-license grant. Issues and design discussion remain welcome. Commit messages use
+Code contributions intentionally submitted for inclusion are licensed under
+the Apache License 2.0 as described in Section 5 of [LICENSE](LICENSE). Issues
+and design discussion remain welcome. Commit messages use
 `type(scope): 中文描述`.
