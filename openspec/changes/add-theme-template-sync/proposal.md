@@ -33,8 +33,8 @@ Section，或受控字段 `sections.<sectionKey>.custom_css`。现有业务项�
 
 ## Non-goals
 
-- 修改或安装到 `shopify-theme-next`，或继续补其 Go `sync-page`。
-- 依赖 `shopify-theme-multi` 才能运行，或迁移其中的店铺身份、theme ID、密钥、
+- 修改或安装到任何消费项目，或继续补消费侧尚未接通远端 adapter 的 Go `sync-page`。
+- 依赖旧业务来源项目才能运行，或迁移其中的店铺身份、theme ID、密钥、
   `.env`、公司配置与真实 evidence。
 - 自动创建主题或 template、自动选择 Live theme、写入 Live theme、Publish，或默认
   扩散到全部店铺。

@@ -3,7 +3,7 @@
 ## 1. 设计选择
 
 采用 Skill 内独立 Go 执行器，以旧 Node.js 实现作为行为迁移来源，不扩展
-`shopify-theme-next` 中未接通远端 adapter 的 Go `sync-page`。后者的窄结构只保留
+消费项目中未接通远端 adapter 的 Go `sync-page`。后者的窄结构只保留
 `sections` 与 `order`，会丢失未知顶层字段，不适合作为本能力的数据模型。
 
 备选方案及取舍：

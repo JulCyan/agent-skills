@@ -1,0 +1,5 @@
+{
+  "name": "webperf-lighthouse-engine",
+  "private": true,
+  "dependencies": { "lighthouse": "13.4.1" }
+}

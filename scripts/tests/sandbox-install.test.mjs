@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -44,7 +52,7 @@ function scrubShopifyCredentials(environment) {
 }
 
 test(
-  'tracked snapshot installs two self-contained Skills into a disposable sandbox',
+  'tracked snapshot installs three self-contained Skills into a disposable sandbox',
   { timeout: 120_000 },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'agent-skills-sandbox-install-'));
@@ -58,8 +66,16 @@ test(
     await mkdir(consumer);
     await mkdir(caller);
 
+    const { stdout: indexPathOutput } = await execFileAsync(
+      'git',
+      ['rev-parse', '--git-path', 'index'],
+      { cwd: repositoryRoot },
+    );
+    const isolatedIndex = path.join(root, 'tracked.index');
+    await copyFile(path.resolve(repositoryRoot, indexPathOutput.trim()), isolatedIndex);
     const { stdout: stagedTree } = await execFileAsync('git', ['write-tree'], {
       cwd: repositoryRoot,
+      env: { ...process.env, GIT_INDEX_FILE: isolatedIndex },
     });
     await execFileAsync(
       'git',
@@ -86,10 +102,11 @@ test(
       },
     );
     const installOutput = `${installStdout}\n${installStderr}`;
-    assert.match(installOutput, /Found 2 skills\b/);
-    assert.match(installOutput, /Installed 2 skills\b/);
+    assert.match(installOutput, /Found 3 skills\b/);
+    assert.match(installOutput, /Installed 3 skills\b/);
     assert.match(installOutput, /\bshopify-media-sync\b/);
     assert.match(installOutput, /\btheme-template-sync\b/);
+    assert.match(installOutput, /\bweb-performance-lab\b/);
 
     const lock = JSON.parse(await readFile(path.join(consumer, 'skills-lock.json'), 'utf8'));
     const entry = lock.skills['shopify-media-sync'];
@@ -109,6 +126,15 @@ test(
       (await verifyInstalledSkill({
         projectRoot: consumer,
         skillName: 'theme-template-sync',
+      })).status,
+      'MATCH',
+    );
+    const webPerformanceEntry = lock.skills['web-performance-lab'];
+    assert.match(webPerformanceEntry.computedHash, /^[a-f0-9]{64}$/);
+    assert.equal(
+      (await verifyInstalledSkill({
+        projectRoot: consumer,
+        skillName: 'web-performance-lab',
       })).status,
       'MATCH',
     );

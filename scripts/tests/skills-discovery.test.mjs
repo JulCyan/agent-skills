@@ -10,7 +10,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testDir, '..', '..');
 
 test(
-  'npx skills discovery exposes both product Skills',
+  'npx skills discovery exposes all three product Skills',
   { timeout: 60_000 },
   async () => {
     const { stdout, stderr } = await execFileAsync(
@@ -23,9 +23,10 @@ test(
       },
     );
     const output = `${stdout}\n${stderr}`;
-    assert.match(output, /Found 2 skills\b/);
+    assert.match(output, /Found 3 skills\b/);
     assert.match(output, /\bshopify-media-sync\b/);
     assert.match(output, /\btheme-template-sync\b/);
+    assert.match(output, /\bweb-performance-lab\b/);
     assert.doesNotMatch(output, /\bopenspec-/);
   },
 );

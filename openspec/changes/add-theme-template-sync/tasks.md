@@ -19,8 +19,7 @@ OpenSpec 1.7.0、Skills CLI 1.5.21。
 
 - [x] 所有自动化测试只使用合成 fixture、fake adapter 或 fake Shopify CLI；不得读取
   `.env`、token、cookie、凭据或调用真实 Shopify。
-- [x] 不修改或安装到 `shopify-theme-next`，不让新 Skill 依赖
-  `shopify-theme-multi`。
+- [x] 不修改或安装到任何消费项目，不让新 Skill 依赖旧业务来源项目。
 - [x] 不实现 theme create/duplicate、Live target override、Publish、隐式 target、任意
   JSON Pointer 或 Git 代码同步。
 - [x] 每项行为先写失败测试，再写最小实现；实现阶段保留可复查的 RED/GREEN 命令证据。
@@ -39,9 +38,9 @@ OpenSpec 1.7.0、Skills CLI 1.5.21。
 
 ### Steps
 
-- [x] 将 discovery 预期从一个 Skill 改为两个，并分别断言
-  `shopify-media-sync` 与 `theme-template-sync`，继续排除 `openspec-*`。
-- [x] 扩展 tracked-snapshot copy-install 测试：断言安装两个 Skill、两个 lock entry 的
+- [x] 将 discovery 预期改为三个，并分别断言 `shopify-media-sync`、
+  `theme-template-sync` 与 `web-performance-lab`，继续排除 `openspec-*`。
+- [x] 扩展 tracked-snapshot copy-install 测试：断言安装三个 Skill、三个 lock entry 的
   SHA 格式和 `verifyInstalledSkill(...).status === "MATCH"`；新 Skill 只运行 `--help`，
   不执行远端命令。
 - [x] 为新 POSIX launcher 写仓库外 cwd 测试：显式 fake binary 接收原样 argv 且 cwd
@@ -51,7 +50,7 @@ OpenSpec 1.7.0、Skills CLI 1.5.21。
 - [x] 先运行
   `node --test scripts/tests/skills-discovery.test.mjs scripts/tests/sandbox-install.test.mjs scripts/tests/theme-template-launcher.test.mjs`
   并确认因新 Skill 尚不存在而失败，而不是网络、凭据或 fixture 原因。
-- [x] 将 `test:go` 扩展为依次测试两个独立 Go module；将 `test:shell` 扩展为对两个
+- [x] 将 `test:go` 扩展为依次测试三个独立 Go module；将 `test:shell` 扩展为对三个
   wrapper 执行 `sh -n`。此时不放宽旧 Skill 的任何断言。
 
 ## 2. 建立安装单元与 CLI 外壳
@@ -399,7 +398,7 @@ type PreviewBinding struct {
   Shopify 产品。
 - [x] copy-install 测试运行安装副本 wrapper `--help`，从 caller cwd 执行且不写 Skill
   安装目录；lock hash 用仓库 verifier 验证 `MATCH`。
-- [x] 仓库 README、verification、dependencies 与 maintenance 文档列出两个 Skill、各自
+- [x] 仓库 README、verification、dependencies 与 maintenance 文档列出三个 Skill、各自
   runtime 边界和通用 copy-install/verifier 用法，不把本地实现描述为已发布 Release。
 - [x] 运行
   `python3 <skill-creator-dir>/scripts/quick_validate.py skills/theme-template-sync`
@@ -410,10 +409,10 @@ type PreviewBinding struct {
 ### Files
 
 - Modify: `openspec/changes/add-theme-template-sync/tasks.md`
-- Inspect only:
-  - `shopify-theme-multi/scripts/ops/sync-page.js`
-  - `shopify-theme-multi/scripts/ops/lib/sync-page-core.js`
-  - `shopify-theme-multi/scripts/ops/lib/page-json.js`
+- Inspect only in the user-provided legacy source project:
+  - `scripts/ops/sync-page.js`
+  - `scripts/ops/lib/sync-page-core.js`
+  - `scripts/ops/lib/page-json.js`
   - 同目录 audit/config/tests/callers
 
 ### Steps
@@ -424,15 +423,15 @@ type PreviewBinding struct {
   staging duplicate、Liquid/media/Git sync、业务 tmp/backup/log、shell command strings。
 - [x] 用合成 fixture 运行 `go test -count=1 -race ./...` 和 `go vet ./...`（新 module），
   再对旧 module 运行既有 `go test ./...`，不得把 baseline 失败误报为本 change 成功。
-- [x] 运行 `sh -n` 两个 wrapper、skill validator、Node tests、公开内容扫描、
+- [x] 运行 `sh -n` 三个 wrapper、skill validator、Node tests、公开内容扫描、
   `OPENSPEC_TELEMETRY=0 npx --yes @fission-ai/openspec@1.7.0 validate --all --strict --no-interactive`
   与完整 `npm test`。
-- [x] 从干净 tracked snapshot copy-install 两个 Skills，确认新 Skill 在 provider 外 cwd
+- [x] 从干净 tracked snapshot copy-install 三个 Skills，确认新 Skill 在 provider 外 cwd
   `--help` 成功且安装目录无 runtime evidence。
 - [x] 检查 `git diff --check`、`git status --short`、tracked 文件名与公开扫描；确认没有
   `.env`、credential、真实 domain/theme ID、个人绝对路径、runtime evidence 或消费项目
   改动。
 - [x] 将所有已完成 checkbox 更新为 `[x]`；只记录实际通过的验证，Release、真实 Shopify、
-  Preview、Publish、Live 与 `shopify-theme-next` rollout 保持 Cannot Claim。
+  Preview、Publish、Live 与消费项目 rollout 保持 Cannot Claim。
 - [x] 创建一个本地实现 commit：
   `feat(ops): 新增主题 JSON 模板安全同步 Skill`。不 push、不创建 PR、不安装到消费项目。

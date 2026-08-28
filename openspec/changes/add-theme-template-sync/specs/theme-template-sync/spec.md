@@ -9,7 +9,7 @@ template 同步能力。
 
 系统 SHALL 将 `theme-template-sync` 作为 `skills/theme-template-sync` 下的自包含
 产品 Skill，通过仓库既有 Skills CLI 发现和 copy-install；安装副本不得依赖 provider
-仓库路径或 `shopify-theme-multi`、`shopify-theme-next`。
+仓库路径、旧业务来源项目或任何消费项目。
 
 #### Scenario: 从 tracked snapshot 安装
 

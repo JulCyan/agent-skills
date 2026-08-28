@@ -76,6 +76,16 @@ test('Git index scan includes tracked files under filesystem-ignored directories
   ]);
 });
 
+test('filesystem scan ignores local review artifacts', async () => {
+  const syntheticEmail = ['reviewer', 'example.test'].join('@');
+  const root = await fixture({
+    '.superpowers/sdd/review.diff': `synthetic fixture ${syntheticEmail}\n`,
+  });
+
+  const findings = await scanPaths(root, await loadPolicy(policyPath));
+  assert.deepEqual(findings, []);
+});
+
 test('external PR metadata is scanned without treating SSH remotes as email', async () => {
   const forbidden = 'private-project';
   const findings = scanMetadataText(
