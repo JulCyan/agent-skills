@@ -68,13 +68,16 @@ function webperfRuntimeEnvironment(
   return scrubbed;
 }
 
-test('repository declares explicit validation entrypoints for both product CLIs', async () => {
+test('repository declares explicit validation entrypoints for all product CLIs', async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
   assert.deepEqual(
     {
       'test:go:media-sync': manifest.scripts['test:go:media-sync'],
+      'test:go:theme-template-sync': manifest.scripts['test:go:theme-template-sync'],
       'test:go:webperf': manifest.scripts['test:go:webperf'],
       'test:shell:media-sync': manifest.scripts['test:shell:media-sync'],
+      'test:shell:theme-template-sync':
+        manifest.scripts['test:shell:theme-template-sync'],
       'test:shell:webperf': manifest.scripts['test:shell:webperf'],
       'test:go': manifest.scripts['test:go'],
       'test:shell': manifest.scripts['test:shell'],
@@ -82,13 +85,19 @@ test('repository declares explicit validation entrypoints for both product CLIs'
     {
       'test:go:media-sync':
         'cd skills/shopify-media-sync/scripts/media-sync-go && go test ./...',
+      'test:go:theme-template-sync':
+        'cd skills/theme-template-sync/scripts/template-sync-go && go test ./...',
       'test:go:webperf':
         'cd skills/web-performance-lab/scripts/webperf-go && go test ./...',
       'test:shell:media-sync':
         'sh -n skills/shopify-media-sync/scripts/shopify-media-sync.sh',
+      'test:shell:theme-template-sync':
+        'sh -n skills/theme-template-sync/scripts/theme-template-sync.sh',
       'test:shell:webperf': 'sh -n skills/web-performance-lab/scripts/webperf',
-      'test:go': 'npm run test:go:media-sync && npm run test:go:webperf',
-      'test:shell': 'npm run test:shell:media-sync && npm run test:shell:webperf',
+      'test:go':
+        'npm run test:go:media-sync && npm run test:go:theme-template-sync && npm run test:go:webperf',
+      'test:shell':
+        'npm run test:shell:media-sync && npm run test:shell:theme-template-sync && npm run test:shell:webperf',
     },
   );
 });
@@ -156,9 +165,10 @@ test(
       },
     );
     const installOutput = `${installStdout}\n${installStderr}`;
-    assert.match(installOutput, /Found 2 skills\b/);
-    assert.match(installOutput, /Installed 2 skills\b/);
+    assert.match(installOutput, /Found 3 skills\b/);
+    assert.match(installOutput, /Installed 3 skills\b/);
     assert.match(installOutput, /\bshopify-media-sync\b/);
+    assert.match(installOutput, /\btheme-template-sync\b/);
     assert.match(installOutput, /\bweb-performance-lab\b/);
     assert.equal(
       (await verifyInstalledSkill({

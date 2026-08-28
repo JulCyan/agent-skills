@@ -43,6 +43,8 @@ function scrubShopifyCredentials(environment) {
     'SHOPIFY_CLIENT_ID',
     'SHOPIFY_CLIENT_SECRET',
     'SHOPIFY_STORE',
+    'THEME_TEMPLATE_SYNC_BINARY',
+    'THEME_TEMPLATE_SYNC_CALLER_CWD',
   ]) {
     delete scrubbed[key];
   }
@@ -50,7 +52,7 @@ function scrubShopifyCredentials(environment) {
 }
 
 test(
-  'tracked snapshot installs both self-contained Skills into a disposable sandbox',
+  'tracked snapshot installs three self-contained Skills into a disposable sandbox',
   { timeout: 120_000 },
   async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'agent-skills-sandbox-install-'));
@@ -100,9 +102,10 @@ test(
       },
     );
     const installOutput = `${installStdout}\n${installStderr}`;
-    assert.match(installOutput, /Found 2 skills\b/);
-    assert.match(installOutput, /Installed 2 skills\b/);
+    assert.match(installOutput, /Found 3 skills\b/);
+    assert.match(installOutput, /Installed 3 skills\b/);
     assert.match(installOutput, /\bshopify-media-sync\b/);
+    assert.match(installOutput, /\btheme-template-sync\b/);
     assert.match(installOutput, /\bweb-performance-lab\b/);
 
     const lock = JSON.parse(await readFile(path.join(consumer, 'skills-lock.json'), 'utf8'));
@@ -117,6 +120,17 @@ test(
       })).status,
       'MATCH',
     );
+    const templateEntry = lock.skills['theme-template-sync'];
+    assert.match(templateEntry.computedHash, /^[a-f0-9]{64}$/);
+    assert.equal(
+      (await verifyInstalledSkill({
+        projectRoot: consumer,
+        skillName: 'theme-template-sync',
+      })).status,
+      'MATCH',
+    );
+    const webPerformanceEntry = lock.skills['web-performance-lab'];
+    assert.match(webPerformanceEntry.computedHash, /^[a-f0-9]{64}$/);
     assert.equal(
       (await verifyInstalledSkill({
         projectRoot: consumer,
@@ -201,5 +215,26 @@ test(
     assert.equal(inspection.run_id.length > 0, true);
     assert.match(inspection.plan_path, /run\/plan\.json$/);
     assert.match(inspection.plan_sha256, /^[a-f0-9]{64}$/);
+
+    const templateWrapper = path.join(
+      consumer,
+      '.agents',
+      'skills',
+      'theme-template-sync',
+      'scripts',
+      'theme-template-sync.sh',
+    );
+    const { stdout: templateHelp } = await execFileAsync(templateWrapper, ['--help'], {
+      cwd: caller,
+      env: runtimeEnvironment,
+      maxBuffer: 1024 * 1024,
+    });
+    assert.match(templateHelp, /theme-template-sync safely synchronizes Shopify JSON templates/);
+    assert.equal(
+      await doesNotExist(
+        path.join(consumer, '.agents', 'skills', 'theme-template-sync', '.runtime'),
+      ),
+      true,
+    );
   },
 );

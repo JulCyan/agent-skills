@@ -10,11 +10,13 @@
     "scan:public": "node scripts/scan-public.mjs",
     "test:node": "node --test scripts/tests/*.test.mjs",
     "test:go:media-sync": "cd skills/shopify-media-sync/scripts/media-sync-go && go test ./...",
+    "test:go:theme-template-sync": "cd skills/theme-template-sync/scripts/template-sync-go && go test ./...",
     "test:go:webperf": "cd skills/web-performance-lab/scripts/webperf-go && go test ./...",
-    "test:go": "npm run test:go:media-sync && npm run test:go:webperf",
+    "test:go": "npm run test:go:media-sync && npm run test:go:theme-template-sync && npm run test:go:webperf",
     "test:shell:media-sync": "sh -n skills/shopify-media-sync/scripts/shopify-media-sync.sh",
+    "test:shell:theme-template-sync": "sh -n skills/theme-template-sync/scripts/theme-template-sync.sh",
     "test:shell:webperf": "sh -n skills/web-performance-lab/scripts/webperf",
-    "test:shell": "npm run test:shell:media-sync && npm run test:shell:webperf",
+    "test:shell": "npm run test:shell:media-sync && npm run test:shell:theme-template-sync && npm run test:shell:webperf",
     "test:openspec": "OPENSPEC_TELEMETRY=0 npx --yes @fission-ai/openspec@1.7.0 validate --all --strict --no-interactive",
     "test": "npm run scan:public && npm run test:node && npm run test:go && npm run test:shell && npm run test:openspec"
   }

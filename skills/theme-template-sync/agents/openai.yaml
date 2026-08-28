@@ -1,0 +1,6 @@
+interface:
+  display_name: "Theme Template Sync"
+  short_description: "Safely sync scoped Shopify JSON template content"
+  default_prompt: "Use $theme-template-sync to plan and safely supervise a scoped Shopify JSON template synchronization."
+policy:
+  allow_implicit_invocation: true
