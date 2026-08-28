@@ -1,16 +1,15 @@
 # Publication Status
 
-Status: **PUBLIC SOURCE PREVIEW — LICENSE AND BINARY RELEASE PENDING**
+Status: **PUBLIC SOURCE PREVIEW — BINARY RELEASE PENDING**
 
-The repository is publicly readable and supports GitHub-source installation.
-It does not yet publish:
+The repository is publicly readable, licensed under the Apache License 2.0,
+and supports GitHub-source installation. It does not yet publish:
 
-- an open-source license grant;
 - a compiled executor Release;
 - an npm or other package-registry artifact;
 - a no-Go runtime guarantee;
 - a Shopify production-support claim.
 
-Source visibility, installation verification, a future license, binary release
-integrity, consumer rollout, and Shopify production behavior remain separate
-decisions and evidence layers.
+The Apache-2.0 license grant does not itself establish binary release
+integrity, consumer rollout, or Shopify production behavior; those remain
+separate decisions and evidence layers.
