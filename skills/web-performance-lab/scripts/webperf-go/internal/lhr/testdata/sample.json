@@ -1,0 +1,28 @@
+{
+  "lighthouseVersion": "13.4.1",
+  "finalDisplayedUrl": "https://example.test/page",
+  "finalUrl": "https://example.test/page",
+  "categories": {
+    "performance": {
+      "score": 0.91
+    }
+  },
+  "audits": {
+    "first-contentful-paint": { "numericValue": 1200 },
+    "largest-contentful-paint": { "numericValue": 2400 },
+    "speed-index": { "numericValue": 1800 },
+    "total-blocking-time": { "numericValue": 90 },
+    "cumulative-layout-shift": { "numericValue": 0.03 },
+    "lcp-breakdown-insight": {
+      "details": {
+        "items": [
+          { "type": "node", "selector": "main > img.hero" }
+        ]
+      }
+    }
+  },
+  "environment": {
+    "benchmarkIndex": 1234
+  },
+  "runWarnings": ["synthetic warning"]
+}
